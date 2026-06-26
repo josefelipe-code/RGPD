@@ -1,10 +1,12 @@
 <?php
 
 use App\Enums\MailMessageStatus;
+use App\Models\Expedient;
 use App\Models\MailAccount;
 use App\Models\MailMessage;
 use App\Models\User;
 use App\Services\Bandeja\ImapSyncService;
+use App\Services\Bandeja\InboundSuggestionService;
 use Flux\Flux;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\HtmlString;
@@ -162,6 +164,63 @@ new #[Title('Bandeja de entrada')] class extends Component {
         }
 
         return new HtmlString('<p>'.e(__('Sin contenido.')).'</p>');
+    }
+
+    /**
+     * Compute suggestion candidates for the selected message.
+     * Only for unassociated, non-discarded incoming messages.
+     *
+     * @return \Illuminate\Support\Collection<int, array{expedient: Expedient, confidence: string, reason: string}>
+     */
+    #[Computed]
+    public function suggestions()
+    {
+        $message = $this->selectedMessage;
+
+        if ($message === null) {
+            return collect();
+        }
+
+        // Only show suggestions for unassociated, non-discarded incoming messages
+        if ($message->case_id !== null || $message->status === MailMessageStatus::Discarded) {
+            return collect();
+        }
+
+        return app(InboundSuggestionService::class)->suggest($message);
+    }
+
+    /**
+     * Associate a mail message to an expedient (user-confirmed link).
+     */
+    public function associateMessage(int $messageId, int $expedientId): void
+    {
+        abort_unless(Auth::user()->can('bandeja.clasificar'), 403);
+
+        $account = $this->resolveSelectedAccount();
+        abort_if($account === null, 403);
+
+        $message = MailMessage::where('mail_account_id', $account->id)->findOrFail($messageId);
+
+        // Verify the expedient belongs to the same mail account and is owned by the user
+        $expedient = Expedient::where('mail_account_id', $account->id)
+            ->where('id', $expedientId)
+            ->first();
+
+        abort_if($expedient === null, 403);
+
+        $message->update([
+            'case_id' => $expedient->id,
+            'status' => MailMessageStatus::Associated,
+        ]);
+
+        if ($this->selectedMessageId === $messageId) {
+            $this->selectedMessageId = null;
+        }
+
+        Flux::toast(
+            variant: 'success',
+            text: __('Mensaje asociado al expediente :number.', ['number' => $expedient->case_number]),
+        );
     }
 
     #[Computed]
@@ -408,15 +467,51 @@ new #[Title('Bandeja de entrada')] class extends Component {
         >
             <x-slot:actions>
                 @can('bandeja.clasificar')
-                    @if ($this->selectedMessage && $this->selectedMessage->status !== MailMessageStatus::Discarded)
-                        <flux:button
-                            wire:click="suggestNewCase({{ $this->selectedMessage->id }})"
-                            variant="primary"
-                            size="sm"
-                            icon="folder-plus"
-                        >
-                            {{ __('Sugerir iniciar expediente') }}
-                        </flux:button>
+                    @if ($this->selectedMessage && $this->selectedMessage->status !== MailMessageStatus::Discarded && $this->selectedMessage->case_id === null)
+                        {{-- Suggestion candidates from InboundSuggestionService --}}
+                        @php
+                            $suggestions = $this->suggestions;
+                        @endphp
+
+                        @if ($suggestions->isNotEmpty())
+                            <div class="w-full space-y-2">
+                                <flux:heading size="xs" class="text-zinc-500 dark:text-zinc-400">
+                                    {{ __('Expedientes sugeridos') }}
+                                </flux:heading>
+
+                                @foreach ($suggestions as $suggestion)
+                                    <div class="flex items-center justify-between gap-2 rounded-md border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 px-3 py-2">
+                                        <div class="min-w-0">
+                                            <span class="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                                                {{ $suggestion['expedient']->case_number }}
+                                            </span>
+                                            <span class="ml-2 text-xs text-zinc-500 dark:text-zinc-400">
+                                                {{ $suggestion['reason'] }}
+                                            </span>
+                                        </div>
+
+                                        <flux:button
+                                            wire:click="associateMessage({{ $this->selectedMessage->id }}, {{ $suggestion['expedient']->id }})"
+                                            variant="primary"
+                                            size="xs"
+                                            icon="link"
+                                        >
+                                            {{ __('Asociar') }}
+                                        </flux:button>
+                                    </div>
+                                @endforeach
+                            </div>
+                        @else
+                            {{-- No matching expedientes — offer create-new --}}
+                            <flux:button
+                                wire:click="suggestNewCase({{ $this->selectedMessage->id }})"
+                                variant="primary"
+                                size="sm"
+                                icon="folder-plus"
+                            >
+                                {{ __('Crear expediente') }}
+                            </flux:button>
+                        @endif
 
                         <flux:button
                             wire:click="discard({{ $this->selectedMessage->id }})"
