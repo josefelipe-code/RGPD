@@ -414,15 +414,17 @@ test('show page shows empty state when no mail messages (S22)', function () {
         ->assertSee('Sin mensajes asociados');
 });
 
-test('show page mail section is read-only with no reply controls (S23)', function () {
+test('show page mail section shows reply/forward buttons for incoming messages (PR3)', function () {
     $expedient = Expedient::factory()->create();
-    MailMessage::factory()->associated()->create(['case_id' => $expedient->id]);
+    MailMessage::factory()->associated()->create([
+        'case_id' => $expedient->id,
+        'direction' => MailDirection::Incoming,
+    ]);
 
     $this->actingAs($this->admin)
         ->get(route('expedientes.show', $expedient))
-        ->assertDontSee('Responder')
-        ->assertDontSee('Reenviar')
-        ->assertDontSee('Redactar');
+        ->assertSee('Responder')
+        ->assertSee('Reenviar');
 });
 
 test('milestone timeline shows reopened label and icon', function () {

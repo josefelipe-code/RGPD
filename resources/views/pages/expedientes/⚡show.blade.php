@@ -22,6 +22,10 @@ new #[Title('Detalle del Expediente')] class extends Component {
     public string $milestoneAction = '';
     public string $milestoneNotes = '';
 
+    // Mail composer state
+    public ?string $composerMode = null;
+    public ?int $composerOriginMessageId = null;
+
     public function mount(Expedient $expedient): void
     {
         $this->expedient = $expedient;
@@ -45,7 +49,7 @@ new #[Title('Detalle del Expediente')] class extends Component {
     {
         return $this->expedient
             ->milestones()
-            ->with('user')
+            ->with(['user', 'mailMessage'])
             ->latest()
             ->get();
     }
@@ -68,6 +72,7 @@ new #[Title('Detalle del Expediente')] class extends Component {
     {
         return $this->expedient
             ->mailMessages()
+            ->with('to')
             ->latest('received_at')
             ->get();
     }
@@ -111,6 +116,22 @@ new #[Title('Detalle del Expediente')] class extends Component {
         $this->reset(['milestoneAction', 'milestoneNotes']);
 
         Flux::toast(variant: 'success', text: __('Hito registrado.'));
+    }
+
+    public function openComposer(string $mode, int $messageId): void
+    {
+        abort_unless(Auth::user()->can('expedientes.actualizar'), 403);
+
+        $this->composerMode = $mode;
+        $this->composerOriginMessageId = $messageId;
+
+        Flux::modal('mail-composer')->show();
+    }
+
+    public function closeComposer(): void
+    {
+        $this->composerMode = null;
+        $this->composerOriginMessageId = null;
     }
 
     private function milestoneLabel(string $action): string
@@ -298,7 +319,7 @@ new #[Title('Detalle del Expediente')] class extends Component {
     {{-- Associated mail messages --}}
     <flux:card>
         <flux:heading size="md">{{ __('Mensajes asociados') }}</flux:heading>
-        <flux:text variant="subtle" size="sm" class="mb-3">{{ __('Mensajes de correo vinculados a este expediente (solo lectura).') }}</flux:text>
+        <flux:text variant="subtle" size="sm" class="mb-3">{{ __('Mensajes de correo vinculados a este expediente.') }}</flux:text>
 
         @forelse ($this->associatedMessages as $message)
             <div class="flex items-start gap-3 py-2 @if (! $loop->first) border-t border-neutral-200 dark:border-neutral-700 @endif" wire:key="msg-{{ $message->id }}">
@@ -309,6 +330,28 @@ new #[Title('Detalle del Expediente')] class extends Component {
                     <flux:text class="truncate">{{ $message->subject ?? __('Sin asunto') }}</flux:text>
                     <flux:text variant="subtle" size="xs">{{ $message->received_at?->format('d/m/Y H:i') ?? '—' }}</flux:text>
                 </div>
+                @can('expedientes.actualizar')
+                    @if ($message->direction->value === 'incoming')
+                        <div class="flex gap-1 shrink-0">
+                            <flux:button
+                                variant="ghost"
+                                size="xs"
+                                wire:click="openComposer('reply_client', {{ $message->id }})"
+                            >
+                                <flux:icon name="arrow-uturn-left" class="w-3 h-3" />
+                                {{ __('Responder') }}
+                            </flux:button>
+                            <flux:button
+                                variant="ghost"
+                                size="xs"
+                                wire:click="openComposer('forward_provider', {{ $message->id }})"
+                            >
+                                <flux:icon name="arrow-turn-down-right" class="w-3 h-3" />
+                                {{ __('Reenviar') }}
+                            </flux:button>
+                        </div>
+                    @endif
+                @endcan
             </div>
         @empty
             <flux:text variant="subtle" class="text-center py-2">
@@ -368,6 +411,12 @@ new #[Title('Detalle del Expediente')] class extends Component {
                                 <span>{{ $milestone->created_at->diffForHumans() }}</span>
                                 <span>·</span>
                                 <span>{{ $milestone->created_at->format('d/m/Y H:i') }}</span>
+                                @if ($milestone->mailMessage)
+                                    <span>·</span>
+                                    <flux:link size="xs" icon="envelope" class="truncate">
+                                        {{ $milestone->mailMessage->subject ?? __('Mensaje de correo') }}
+                                    </flux:link>
+                                @endif
                             </div>
                         </div>
                     </div>
@@ -381,4 +430,15 @@ new #[Title('Detalle del Expediente')] class extends Component {
             @endforelse
         </div>
     </div>
+
+    {{-- Mail composer modal --}}
+    @can('expedientes.actualizar')
+        @if ($composerMode && $composerOriginMessageId)
+            @livewire('pages::bandeja.mail-composer', [
+                'mode' => $composerMode,
+                'expedientId' => $expedient->id,
+                'originMessageId' => $composerOriginMessageId,
+            ], key('mail-composer-'.$composerMode.'-'.$composerOriginMessageId))
+        @endif
+    @endcan
 </section>

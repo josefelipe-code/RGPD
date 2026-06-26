@@ -174,6 +174,40 @@ class Expedient extends Model
     }
 
     /**
+     * Reply to client: transition to PendingClient and create a RepliedClient milestone
+     * linked to the outbound mail message.
+     */
+    public function replyClient(MailMessage $outgoing, User $actor): CaseMilestone
+    {
+        return DB::transaction(function () use ($outgoing, $actor) {
+            $this->update(['status' => CaseStatus::PendingClient]);
+
+            return $this->milestones()->create([
+                'user_id' => $actor->id,
+                'action' => MilestoneAction::RepliedClient,
+                'mail_message_id' => $outgoing->id,
+            ]);
+        });
+    }
+
+    /**
+     * Forward to provider: transition to PendingProvider and create a RepliedProvider
+     * milestone linked to the outbound mail message.
+     */
+    public function forwardProvider(MailMessage $outgoing, User $actor): CaseMilestone
+    {
+        return DB::transaction(function () use ($outgoing, $actor) {
+            $this->update(['status' => CaseStatus::PendingProvider]);
+
+            return $this->milestones()->create([
+                'user_id' => $actor->id,
+                'action' => MilestoneAction::RepliedProvider,
+                'mail_message_id' => $outgoing->id,
+            ]);
+        });
+    }
+
+    /**
      * Scope a query to only open expedients.
      */
     public function scopeOpen($query)
