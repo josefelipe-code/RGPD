@@ -14,14 +14,23 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'case_id',
     'mail_account_id',
     'message_id',
+    'to_email',
     'subject',
     'from_email',
     'from_name',
+    'sender_phone',
     'body_html',
     'body_text',
     'received_at',
+    'sent_at',
     'direction',
     'status',
+    'in_reply_to',
+    'references',
+    'cc',
+    'bcc',
+    'folder',
+    'thread_id',
 ])]
 class MailMessage extends Model
 {
@@ -37,8 +46,12 @@ class MailMessage extends Model
     {
         return [
             'received_at' => 'datetime',
+            'sent_at' => 'datetime',
             'direction' => MailDirection::class,
             'status' => MailMessageStatus::class,
+            'cc' => 'array',
+            'bcc' => 'array',
+            'references' => 'array',
         ];
     }
 
@@ -80,5 +93,13 @@ class MailMessage extends Model
     public function scopeUnassociated($query)
     {
         return $query->whereNull('case_id');
+    }
+
+    /**
+     * Get the original message this is a reply to (via in_reply_to → message_id).
+     */
+    public function to(): BelongsTo
+    {
+        return $this->belongsTo(MailMessage::class, 'in_reply_to', 'message_id');
     }
 }

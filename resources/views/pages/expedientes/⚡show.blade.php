@@ -15,6 +15,9 @@ use Livewire\Component;
 new #[Title('Detalle del Expediente')] class extends Component {
     public Expedient $expedient;
 
+    // Inline status control
+    public ?string $statusTarget = null;
+
     // Add milestone form
     public string $milestoneAction = '';
     public string $milestoneNotes = '';
@@ -33,6 +36,7 @@ new #[Title('Detalle del Expediente')] class extends Component {
         return [
             'milestoneAction' => ['required', Rule::enum(MilestoneAction::class)],
             'milestoneNotes' => ['nullable', 'string', 'max:1000'],
+            'statusTarget' => ['nullable', Rule::enum(CaseStatus::class)],
         ];
     }
 
@@ -47,9 +51,49 @@ new #[Title('Detalle del Expediente')] class extends Component {
     }
 
     #[Computed]
+    public function related()
+    {
+        return $this->expedient
+            ->relatedTo(
+                $this->expedient->sender_email,
+                $this->expedient->sender_phone,
+                5
+            )
+            ->with('assignedUser')
+            ->get();
+    }
+
+    #[Computed]
+    public function associatedMessages()
+    {
+        return $this->expedient
+            ->mailMessages()
+            ->latest('received_at')
+            ->get();
+    }
+
+    #[Computed]
     public function availableUsers()
     {
         return User::query()->orderBy('name')->get();
+    }
+
+    public function changeStatus(): void
+    {
+        abort_unless(Auth::user()->can('expedientes.actualizar'), 403);
+
+        $validated = $this->validate([
+            'statusTarget' => ['required', Rule::enum(CaseStatus::class)],
+        ]);
+
+        $this->expedient->transitionTo(
+            CaseStatus::from($validated['statusTarget']),
+            Auth::user()
+        );
+
+        $this->statusTarget = null;
+
+        Flux::toast(variant: 'success', text: __('Estado actualizado.'));
     }
 
     public function addMilestone(): void
@@ -76,6 +120,7 @@ new #[Title('Detalle del Expediente')] class extends Component {
             'replied_client' => __('Respuesta al cliente'),
             'replied_provider' => __('Respuesta al proveedor'),
             'closed' => __('Cierre'),
+            'reopened' => __('Reapertura'),
             default => $action,
         };
     }
@@ -87,6 +132,7 @@ new #[Title('Detalle del Expediente')] class extends Component {
             'replied_client' => 'paper-airplane',
             'replied_provider' => 'paper-airplane',
             'closed' => 'lock-closed',
+            'reopened' => 'arrow-path',
             default => 'document',
         };
     }
@@ -98,6 +144,7 @@ new #[Title('Detalle del Expediente')] class extends Component {
             'replied_client' => 'green',
             'replied_provider' => 'amber',
             'closed' => 'red',
+            'reopened' => 'purple',
             default => 'zinc',
         };
     }
@@ -187,6 +234,87 @@ new #[Title('Detalle del Expediente')] class extends Component {
                 </div>
             @endif
         </div>
+    </flux:card>
+
+    {{-- Inline status control --}}
+    @can('expedientes.actualizar')
+        <flux:card>
+            <flux:heading size="md">{{ __('Cambiar estado') }}</flux:heading>
+            <flux:text variant="subtle" size="sm" class="mb-3">{{ __('Actualizá el estado del expediente. Los cambios se registran automáticamente en el historial.') }}</flux:text>
+
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-end">
+                <flux:field class="flex-1">
+                    <flux:label>{{ __('Nuevo estado') }}</flux:label>
+                    <flux:select wire:model="statusTarget">
+                        <flux:select.option value="">{{ __('Seleccionar...') }}</flux:select.option>
+                        @if ($expedient->status === \App\Enums\CaseStatus::Concluded)
+                            <flux:select.option value="pending_client">{{ __('Pendiente del cliente') }}</flux:select.option>
+                            <flux:select.option value="pending_provider">{{ __('Pendiente del proveedor') }}</flux:select.option>
+                        @else
+                            <flux:select.option value="concluded">{{ __('Concluido') }}</flux:select.option>
+                        @endif
+                    </flux:select>
+                </flux:field>
+
+                <flux:button variant="primary" wire:click="changeStatus" icon="check" :disabled="! $statusTarget">
+                    {{ __('Aplicar') }}
+                </flux:button>
+            </div>
+        </flux:card>
+    @endcan
+
+    {{-- Related expedientes panel --}}
+    <flux:card>
+        <flux:heading size="md">{{ __('Expedientes relacionados') }}</flux:heading>
+        <flux:text variant="subtle" size="sm" class="mb-3">{{ __('Expedientes que comparten email o teléfono con este caso.') }}</flux:text>
+
+        @forelse ($this->related as $related)
+            <div class="flex items-center justify-between py-2 @if (! $loop->first) border-t border-neutral-200 dark:border-neutral-700 @endif" wire:key="related-{{ $related->id }}">
+                <div class="flex items-center gap-3">
+                    <flux:link :href="route('expedientes.show', $related)" wire:navigate class="font-medium">
+                        {{ $related->case_number }}
+                    </flux:link>
+                    <flux:badge size="sm" :color="$this->statusBadgeColor($related->status->value)">
+                        {{ $this->statusLabel($related->status->value) }}
+                    </flux:badge>
+                </div>
+                <flux:text variant="subtle" size="sm">
+                    {{ $related->assignedUser?->name ?? '—' }}
+                </flux:text>
+            </div>
+        @empty
+            <flux:text variant="subtle" class="text-center py-2">
+                {{ __('Sin expedientes relacionados') }}
+            </flux:text>
+        @endforelse
+
+        @if ($this->related->count() >= 5)
+            <flux:text variant="subtle" size="xs" class="mt-2 text-neutral-400">
+                {{ __('Mostrando 5 más recientes') }}
+            </flux:text>
+        @endif
+    </flux:card>
+
+    {{-- Associated mail messages --}}
+    <flux:card>
+        <flux:heading size="md">{{ __('Mensajes asociados') }}</flux:heading>
+        <flux:text variant="subtle" size="sm" class="mb-3">{{ __('Mensajes de correo vinculados a este expediente (solo lectura).') }}</flux:text>
+
+        @forelse ($this->associatedMessages as $message)
+            <div class="flex items-start gap-3 py-2 @if (! $loop->first) border-t border-neutral-200 dark:border-neutral-700 @endif" wire:key="msg-{{ $message->id }}">
+                <flux:badge size="sm" :color="$message->direction->value === 'incoming' ? 'blue' : 'green'">
+                    {{ $message->direction->value === 'incoming' ? __('Entrante') : __('Saliente') }}
+                </flux:badge>
+                <div class="flex-1 min-w-0">
+                    <flux:text class="truncate">{{ $message->subject ?? __('Sin asunto') }}</flux:text>
+                    <flux:text variant="subtle" size="xs">{{ $message->received_at?->format('d/m/Y H:i') ?? '—' }}</flux:text>
+                </div>
+            </div>
+        @empty
+            <flux:text variant="subtle" class="text-center py-2">
+                {{ __('Sin mensajes asociados') }}
+            </flux:text>
+        @endforelse
     </flux:card>
 
     {{-- Sección de hitos --}}

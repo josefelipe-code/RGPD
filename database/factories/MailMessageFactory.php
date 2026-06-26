@@ -42,6 +42,11 @@ class MailMessageFactory extends Factory
     {
         return $this->state(fn (array $attributes) => [
             'direction' => MailDirection::Outgoing,
+            'to_email' => fake()->safeEmail(),
+            'cc' => [],
+            'bcc' => [],
+            'sent_at' => now(),
+            'received_at' => now(),
         ]);
     }
 
@@ -53,6 +58,26 @@ class MailMessageFactory extends Factory
         return $this->state(fn (array $attributes) => [
             'case_id' => Expedient::factory(),
             'status' => MailMessageStatus::Associated,
+        ]);
+    }
+
+    /**
+     * Indicate that the message has a parsed sender phone.
+     */
+    public function withPhone(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'sender_phone' => '+34612345678',
+        ]);
+    }
+
+    /**
+     * Indicate that this message is a reply to another message.
+     */
+    public function withInReplyTo(MailMessage $parent): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'in_reply_to' => $parent->message_id,
         ]);
     }
 }

@@ -14,6 +14,7 @@ use Webklex\PHPIMAP\ClientManager;
 use Webklex\PHPIMAP\Exceptions\AuthFailedException;
 use Webklex\PHPIMAP\Exceptions\ConnectionFailedException;
 use Webklex\PHPIMAP\Message;
+use Webklex\PHPIMAP\Support\FlagCollection;
 
 /**
  * Synchronizes IMAP messages from active mail accounts into mail_messages.
@@ -100,6 +101,13 @@ class ImapSyncService
 
         $date = $this->resolveReceivedAt($message->getDate());
 
+        // Extract threading headers
+        $headers = $message->getHeaders();
+        $threading = $this->extractThreadingHeaders($headers);
+
+        // Parse phone from body text
+        $senderPhone = (new PhoneParserService)->parse($bodyText);
+
         return MailMessage::updateOrCreate(
             [
                 'mail_account_id' => $account->id,
@@ -109,11 +117,15 @@ class ImapSyncService
                 'subject' => $subject,
                 'from_email' => $fromEmail,
                 'from_name' => $fromName,
+                'sender_phone' => $senderPhone,
                 'body_html' => $bodyHtml,
                 'body_text' => $bodyText,
                 'received_at' => $date,
                 'direction' => MailDirection::Incoming,
                 'status' => MailMessageStatus::New,
+                'in_reply_to' => $threading['in_reply_to'],
+                'references' => $threading['references'],
+                'folder' => $message->getFolder()?->name,
             ],
         );
     }
@@ -133,5 +145,22 @@ class ImapSyncService
         }
 
         return now();
+    }
+
+    /**
+     * Extract threading headers (In-Reply-To, References) from IMAP message headers.
+     *
+     * @param  FlagCollection  $headers
+     * @return array{in_reply_to: string|null, references: string|null}
+     */
+    protected function extractThreadingHeaders($headers): array
+    {
+        $inReplyTo = $headers->get('in_reply_to');
+        $references = $headers->get('references');
+
+        return [
+            'in_reply_to' => $inReplyTo instanceof Attribute ? $inReplyTo->toString() : null,
+            'references' => $references instanceof Attribute ? $references->toString() : null,
+        ];
     }
 }

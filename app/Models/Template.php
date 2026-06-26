@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Model;
     'subject',
     'body',
     'is_active',
+    'purpose',
 ])]
 class Template extends Model
 {
@@ -36,5 +37,13 @@ class Template extends Model
     public function scopeActive($query)
     {
         return $query->where('is_active', true);
+    }
+
+    /**
+     * Scope a query to templates with a specific purpose.
+     */
+    public function scopeForPurpose($query, string $purpose)
+    {
+        return $query->where('purpose', $purpose);
     }
 }

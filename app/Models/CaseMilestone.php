@@ -14,6 +14,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'user_id',
     'action',
     'notes',
+    'mail_message_id',
 ])]
 class CaseMilestone extends Model
 {
@@ -46,6 +47,14 @@ class CaseMilestone extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /**
+     * Get the outbound mail message that triggered this milestone.
+     */
+    public function mailMessage(): BelongsTo
+    {
+        return $this->belongsTo(MailMessage::class);
     }
 
     /**

@@ -18,9 +18,11 @@ new #[Title('Expedientes')] class extends Component {
     public string $search = '';
     public int $perPage = 10;
     public string $statusFilter = 'all';
+    public int $mailAccountIdFilter = 0;
 
     // Form state
     public ?int $editingExpedientId = null;
+    public ?int $pendingDeleteId = null;
     public string $caseNumber = '';
     public string $senderEmail = '';
     public string $senderPhone = '';
@@ -60,6 +62,11 @@ new #[Title('Expedientes')] class extends Component {
         $this->resetPage();
     }
 
+    public function updatedMailAccountIdFilter(): void
+    {
+        $this->resetPage();
+    }
+
     #[Computed]
     public function expedients()
     {
@@ -68,6 +75,7 @@ new #[Title('Expedientes')] class extends Component {
 
         $query = Expedient::query()
             ->with(['assignedUser', 'mailAccount'])
+            ->when($this->mailAccountIdFilter, fn ($q) => $q->forMailAccount($this->mailAccountIdFilter))
             ->when($this->search, fn ($q) => $q
                 ->where('case_number', 'like', "%{$this->search}%")
                 ->orWhere('sender_email', 'like', "%{$this->search}%")
@@ -82,6 +90,7 @@ new #[Title('Expedientes')] class extends Component {
     public function statusCounts(): array
     {
         return Expedient::query()
+            ->when($this->mailAccountIdFilter, fn ($q) => $q->forMailAccount($this->mailAccountIdFilter))
             ->selectRaw('status, count(*) as count')
             ->groupBy('status')
             ->pluck('count', 'status')
@@ -143,19 +152,31 @@ new #[Title('Expedientes')] class extends Component {
                 'assigned_user_id' => $validated['assignedUserId'],
                 'status' => $validated['status'],
                 'request_type' => $validated['requestType'] ?: null,
-                'opened_at' => now(),
             ])
             : tap(Expedient::query()->findOrFail($this->editingExpedientId), function (Expedient $expedient) use ($validated): void {
+                $oldStatus = $expedient->status;
+                $statusChanged = $oldStatus->value !== $validated['status'];
+
                 $expedient->update([
                     'case_number' => $validated['caseNumber'],
                     'sender_email' => $validated['senderEmail'] ?: null,
                     'sender_phone' => $validated['senderPhone'] ?: null,
                     'mail_account_id' => $validated['mailAccountId'],
                     'assigned_user_id' => $validated['assignedUserId'],
-                    'status' => $validated['status'],
                     'request_type' => $validated['requestType'] ?: null,
                 ]);
+
+                if ($statusChanged) {
+                    $expedient->transitionTo(
+                        CaseStatus::from($validated['status']),
+                        Auth::user()
+                    );
+                }
             });
+
+        if ($isCreating) {
+            $expedient->open(Auth::user());
+        }
 
         $this->resetForm();
 
@@ -170,6 +191,24 @@ new #[Title('Expedientes')] class extends Component {
     {
         $this->resetForm();
         Flux::modal('expedient-form')->close();
+    }
+
+    public function delete(int $expedientId): void
+    {
+        $this->authorizeAbility('expedientes.eliminar');
+
+        $expedient = Expedient::query()->findOrFail($expedientId);
+        $expedient->delete();
+
+        $this->pendingDeleteId = null;
+        Flux::modal('delete-confirm')->close();
+
+        Flux::toast(variant: 'success', text: __('Expediente eliminado.'));
+    }
+
+    public function confirmDelete(int $expedientId): void
+    {
+        $this->pendingDeleteId = $expedientId;
     }
 
     private function authorizeAbility(string $ability): void
@@ -235,6 +274,13 @@ new #[Title('Expedientes')] class extends Component {
             @endforeach
         </flux:select>
 
+        <flux:select wire:model.live="mailAccountIdFilter" :label="__('Cuenta')" size="sm" class="sm:w-48">
+            <flux:select.option value="0">{{ __('Todas las cuentas') }}</flux:select.option>
+            @foreach ($this->mailAccounts as $account)
+                <flux:select.option value="{{ $account->id }}">{{ $account->label ?? $account->email_address }}</flux:select.option>
+            @endforeach
+        </flux:select>
+
         @can('expedientes.crear')
             <flux:modal.trigger name="expedient-form">
                 <flux:button variant="primary" wire:click="create" icon="plus">
@@ -295,7 +341,9 @@ new #[Title('Expedientes')] class extends Component {
                             @endcan
 
                             @can('expedientes.eliminar')
-                                <flux:button variant="danger" size="sm" icon="trash">{{ __('Eliminar') }}</flux:button>
+                                <flux:modal.trigger name="delete-confirm">
+                                    <flux:button variant="danger" size="sm" icon="trash" wire:click="confirmDelete({{ $expedient->id }})">{{ __('Eliminar') }}</flux:button>
+                                </flux:modal.trigger>
                             @endcan
                         </div>
                     </flux:table.cell>
@@ -367,6 +415,27 @@ new #[Title('Expedientes')] class extends Component {
                     </flux:button>
                 </div>
             </form>
+        </div>
+    </flux:modal>
+
+    {{-- Modal confirmar eliminación --}}
+    <flux:modal name="delete-confirm" class="w-full md:w-[24rem]">
+        <div class="space-y-6">
+            <div>
+                <flux:heading size="lg">{{ __('Confirmar eliminación') }}</flux:heading>
+                <flux:text class="text-neutral-600 dark:text-neutral-300">
+                    {{ __('¿Estás seguro de que querés eliminar este expediente? Esta acción no se puede deshacer.') }}
+                </flux:text>
+            </div>
+
+            <div class="flex justify-end gap-2">
+                <flux:modal.close>
+                    <flux:button variant="ghost">{{ __('Cancelar') }}</flux:button>
+                </flux:modal.close>
+                <flux:button variant="danger" wire:click="delete($pendingDeleteId)">
+                    {{ __('Eliminar') }}
+                </flux:button>
+            </div>
         </div>
     </flux:modal>
 </section>

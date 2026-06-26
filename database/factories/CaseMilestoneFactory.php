@@ -5,6 +5,7 @@ namespace Database\Factories;
 use App\Enums\MilestoneAction;
 use App\Models\CaseMilestone;
 use App\Models\Expedient;
+use App\Models\MailMessage;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
@@ -55,6 +56,16 @@ class CaseMilestoneFactory extends Factory
     {
         return $this->state(fn (array $attributes) => [
             'action' => MilestoneAction::Closed,
+        ]);
+    }
+
+    /**
+     * Link the milestone to an outbound mail message.
+     */
+    public function withMailMessage(MailMessage $mailMessage): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'mail_message_id' => $mailMessage->id,
         ]);
     }
 }

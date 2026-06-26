@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\CaseStatus;
+use App\Enums\MilestoneAction;
 use App\Models\Expedient;
 use App\Models\MailAccount;
 use App\Models\User;
@@ -185,4 +186,97 @@ test('created expedient appears in the list', function () {
         ->set('status', CaseStatus::PendingClient->value)
         ->call('save')
         ->assertSee('EXP-LISTED');
+});
+
+// ─── PR2: Lifecycle integration on create (S11, S16) ───
+
+test('creating expedient stamps opened_at and creates Opened milestone (S11)', function () {
+    $assignee = User::factory()->create();
+
+    $this->actingAs($this->admin);
+
+    Livewire::test('pages::expedientes.index')
+        ->call('create')
+        ->set('caseNumber', 'EXP-LIFECYCLE')
+        ->set('senderEmail', 'lifecycle@example.com')
+        ->set('mailAccountId', $this->mailAccount->id)
+        ->set('assignedUserId', $assignee->id)
+        ->set('status', CaseStatus::PendingClient->value)
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $expedient = Expedient::where('case_number', 'EXP-LIFECYCLE')->first();
+
+    expect($expedient->opened_at)->not->toBeNull()
+        ->and($expedient->milestones()->action(MilestoneAction::Opened)->count())->toBe(1);
+});
+
+test('creating expedient with any status stamps opened_at (S16)', function () {
+    $assignee = User::factory()->create();
+
+    $this->actingAs($this->admin);
+
+    Livewire::test('pages::expedientes.index')
+        ->call('create')
+        ->set('caseNumber', 'EXP-CONCLUDED-CREATE')
+        ->set('mailAccountId', $this->mailAccount->id)
+        ->set('assignedUserId', $assignee->id)
+        ->set('status', CaseStatus::Concluded->value)
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $expedient = Expedient::where('case_number', 'EXP-CONCLUDED-CREATE')->first();
+
+    expect($expedient->opened_at)->not->toBeNull()
+        ->and($expedient->status)->toBe(CaseStatus::Concluded);
+});
+
+test('editing expedient with status change calls transitionTo (S12)', function () {
+    $expedient = Expedient::factory()->create([
+        'case_number' => 'EXP-TRANSITION',
+        'status' => CaseStatus::PendingClient,
+        'mail_account_id' => $this->mailAccount->id,
+    ]);
+
+    $this->actingAs($this->admin);
+
+    Livewire::test('pages::expedientes.index')
+        ->call('edit', $expedient->id)
+        ->set('caseNumber', 'EXP-TRANSITION')
+        ->set('mailAccountId', $this->mailAccount->id)
+        ->set('assignedUserId', $expedient->assigned_user_id)
+        ->set('status', CaseStatus::Concluded->value)
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $expedient->refresh();
+
+    expect($expedient->status)->toBe(CaseStatus::Concluded)
+        ->and($expedient->closed_at)->not->toBeNull()
+        ->and($expedient->milestones()->action(MilestoneAction::Closed)->count())->toBe(1);
+});
+
+test('editing expedient without status change does not create milestone (S13)', function () {
+    $expedient = Expedient::factory()->create([
+        'case_number' => 'EXP-NOTRANSITION',
+        'status' => CaseStatus::PendingClient,
+        'mail_account_id' => $this->mailAccount->id,
+    ]);
+
+    $this->actingAs($this->admin);
+
+    Livewire::test('pages::expedientes.index')
+        ->call('edit', $expedient->id)
+        ->set('caseNumber', 'EXP-NOTRANSITION-UPDATED')
+        ->set('mailAccountId', $this->mailAccount->id)
+        ->set('assignedUserId', $expedient->assigned_user_id)
+        ->set('status', CaseStatus::PendingClient->value)
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $expedient->refresh();
+
+    expect($expedient->case_number)->toBe('EXP-NOTRANSITION-UPDATED')
+        ->and($expedient->closed_at)->toBeNull()
+        ->and($expedient->milestones()->count())->toBe(0);
 });
