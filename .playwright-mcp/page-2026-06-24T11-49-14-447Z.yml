@@ -1,0 +1,32 @@
+- generic [ref=e1]:
+  - generic [ref=e3]:
+    - link "Laravel" [ref=e4] [cursor=pointer]:
+      - /url: http://rgpd.test
+      - img [ref=e6]
+      - generic [ref=e8]: Laravel
+    - generic [ref=e10]:
+      - generic [ref=e11]:
+        - generic [ref=e12]: Log in to your account
+        - generic [ref=e13]: Enter your email and password below to log in
+      - generic [ref=e14]:
+        - generic [ref=e15]:
+          - generic [ref=e16]: Email address
+          - textbox "Email address" [active] [ref=e18]:
+            - /placeholder: email@example.com
+        - generic [ref=e19]:
+          - generic [ref=e20]:
+            - generic [ref=e21]: Password
+            - generic [ref=e22]:
+              - textbox "Password" [ref=e23]
+              - button "Toggle password visibility" [ref=e25]:
+                - img [ref=e26]
+          - link "Forgot your password?" [ref=e29] [cursor=pointer]:
+            - /url: http://rgpd.test/forgot-password
+        - generic [ref=e30]:
+          - checkbox "Remember me" [ref=e31]
+          - generic [ref=e33]: Remember me
+        - button "Log in" [ref=e35]:
+          - img [ref=e37]
+          - generic [ref=e40]: Log in
+  - generic:
+    - status

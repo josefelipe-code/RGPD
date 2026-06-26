@@ -746,3 +746,16 @@ El listado de expedientes debe mostrar como base los datos mínimos ya definidos
 - fecha de inicio,
 - usuario que lo tramita,
 - estado de la solicitud.
+
+## Estado técnico verificado 2026-06-08
+
+Este documento describe el producto y el flujo funcional. El estado técnico real verificado en el código es:
+
+- El proyecto ya no es greenfield: existen módulos de administración, contactos, configuración, bandeja y expedientes.
+- Git está activo en `main` y sincronizado con `origin/main`.
+- Laravel arranca en local con PHP 8.4, Laravel 13.8, Livewire 4, Flux 2, Fortify, Spatie Permission y SQLite.
+- La base local tiene datos mínimos de prueba: usuario, rol, permisos, una cuenta de correo, mensajes, categorías, contacto, plantilla y firma.
+- Hay una migración pendiente: `2026_05_17_220000_add_user_id_to_templates`.
+- La suite de tests no está completamente verde: fallan 2 tests de configuración por validación `smtp_connection`.
+- `public/storage` todavía no está linkeado.
+- El dashboard sigue siendo placeholder; las métricas, alertas e informes reales siguen pendientes.

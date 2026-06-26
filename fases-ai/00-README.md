@@ -15,30 +15,37 @@ Estos archivos definen prompts listos para entregar a agentes IA futuros.
 - Tailwind CSS 4.x
 - Symfony Mailer v8 (envío de correos — ya disponible)
 
-## Estado actual del proyecto (NO es greenfield)
+## Estado actual verificado del proyecto (NO es greenfield)
+
+Verificado el **2026-06-08** contra código, rutas, migraciones, base SQLite y tests locales.
 
 El proyecto YA TIENE construido:
 
-- ✅ Autenticación Fortify funcionando (login, registro, 2FA, verificación email)
-- ✅ Spatie Permission migrado y activo (`permission_tables`)
-- ✅ Layout `app.blade.php` con sidebar Flux
-- ✅ Dashboard placeholder (`dashboard.blade.php`)
-- ✅ Páginas Livewire admin: usuarios, roles, permisos (bajo `resources/views/pages/admin/`)
-- ✅ Rutas admin con middleware de permisos (`routes/admin.php`)
-- ✅ Rutas settings: perfil, apariencia, seguridad
-- ✅ Tests Feature: Admin, Auth, Dashboard, Settings
-- ✅ User model con traits `HasRoles`, `TwoFactorAuthenticatable`, `Notifiable`
+- ✅ Repositorio Git activo en `main`, sincronizado con `origin/main`.
+- ✅ Autenticación Fortify funcionando (login, registro, 2FA, verificación email).
+- ✅ Spatie Permission migrado y activo (`permission_tables`) con roles/permisos.
+- ✅ Layout `app.blade.php` con navegación Flux.
+- ✅ Dashboard placeholder (`dashboard.blade.php`).
+- ✅ Páginas Livewire admin: usuarios, roles, permisos (`resources/views/pages/admin/`).
+- ✅ Módulo contactos: categorías y contactos (`resources/views/pages/contactos/`).
+- ✅ Módulo configuración de comunicaciones: cuentas de correo, firmas y plantillas (`resources/views/pages/configuracion/`).
+- ✅ Módulo bandeja de entrada (`resources/views/pages/bandeja/⚡inbox.blade.php`).
+- ✅ Módulo expedientes: índice y detalle (`resources/views/pages/expedientes/`).
+- ✅ Modelos de dominio base: `MailAccount`, `MailMessage`, `Category`, `Contact`, `Template`, `Signature`, `Expedient`, `CaseMilestone`.
+- ✅ Servicio de sincronización IMAP base (`App\Services\Bandeja\ImapSyncService`) y comando `SyncMailMessages`.
+- ✅ Tests Feature/Unit para Auth, Admin, Settings, Mail, Contactos, Configuración, Bandeja, Expedientes y modelos.
+- ✅ Dependencias instaladas (`vendor/`, `node_modules/`) y build Vite presente (`public/build/manifest.json`).
 
-El proyecto NO TIENE todavía:
+Puntos pendientes o NO verdes:
 
-- ❌ Modelos de dominio: MailAccount, Contact, Category, Template, Signature, Case/Expediente, ActivityLog
-- ❌ Integración IMAP para recepción de correos
-- ❌ Envío real SMTP desde la aplicación (Mailer está disponible pero no configurado para las cuentas de negocio)
-- ❌ Módulo bandeja de entrada
-- ❌ Módulo expedientes
-- ❌ Módulo contactos
-- ❌ Módulo configuración de comunicaciones
-- ❌ Dashboard con datos reales, alertas e informes
+- ❌ La suite no está completamente verde: `php artisan test --compact --filter=ConfiguracionAccessTest` falla en 2 tests por validación `smtp_connection` que intenta conectar a SMTP.
+- ❌ Hay una migración pendiente: `2026_05_17_220000_add_user_id_to_templates`.
+- ❌ `public/storage` no está linkeado.
+- ❌ El dashboard sigue siendo placeholder; no hay métricas, alertas ni informes reales.
+- ❌ El envío real SMTP desde cuentas de negocio aún no está confirmado como flujo productivo completo.
+- ❌ La integración final visual/navegación/cruces entre módulos todavía necesita revisión de cierre.
+
+Nota operativa: se limpió cache con `php artisan optimize:clear`; si reaparecen errores con rutas absolutas antiguas en `storage/framework/views`, volver a limpiar vistas/cache antes de diagnosticar UI.
 
 ## Regla transversal obligatoria: consultar y seguir Laravel Boost
 

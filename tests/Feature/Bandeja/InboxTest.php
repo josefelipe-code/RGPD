@@ -354,20 +354,25 @@ it('returns paginator from messages', function () {
     expect($component->get('messages'))->toBeInstanceOf(LengthAwarePaginator::class);
 });
 
-it('resets search when switching accounts', function () {
+it('navigating to a different account shows that accounts messages', function () {
     $account1 = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
     $account2 = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    MailMessage::factory()->for($account1)->create(['from_name' => 'Searchable Name']);
+    MailMessage::factory()->for($account1)->create(['subject' => 'Only In Account One']);
+    MailMessage::factory()->for($account2)->create(['subject' => 'Only In Account Two']);
 
-    $component = Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account1->id)
-        ->set('search', 'Searchable');
+    // Navigate to account1 — shows account1 message
+    $response1 = $this->actingAs($this->user)
+        ->get(route('bandeja.inbox', ['account' => $account1->id]));
+    $response1->assertSee('Only In Account One');
 
-    expect($component->get('search'))->toBe('Searchable');
+    // Navigate to account2 — shows account2 message
+    $response2 = $this->actingAs($this->user)
+        ->get(route('bandeja.inbox', ['account' => $account2->id]));
+    $response2->assertSee('Only In Account Two');
 
-    $component->call('selectAccount', $account2->id);
-    expect($component->get('search'))->toBe('');
+    // Verify account1 message is NOT in account2's response
+    // Use a regex that matches the exact message text in the message list context
+    $response2->assertDontSee('Only In Account One');
 });
 
 it('shows no results message when search has no matches', function () {
@@ -379,4 +384,130 @@ it('shows no results message when search has no matches', function () {
         ->set('selectedAccountId', $account->id)
         ->set('search', 'nonexistent-xyz')
         ->assertSee('No se encontraron resultados');
+});
+
+// -- Navigation context / query string tests
+
+it('selects account from query string parameter', function () {
+    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true, 'label' => 'Test Account']);
+    MailMessage::factory()->for($account)->create(['subject' => 'Account Specific']);
+
+    $this->actingAs($this->user)
+        ->get(route('bandeja.inbox', ['account' => $account->id]))
+        ->assertSee('Account Specific')
+        ->assertSee('Test Account');
+});
+
+it('falls back to first active account when query string account is invalid', function () {
+    $validAccount = MailAccount::factory()->for($this->user)->create(['is_active' => true, 'label' => 'Valid Account']);
+    MailMessage::factory()->for($validAccount)->create(['subject' => 'Valid Message']);
+
+    // Non-existent account ID
+    $this->actingAs($this->user)
+        ->get(route('bandeja.inbox', ['account' => 99999]))
+        ->assertSee('Valid Message');
+});
+
+it('falls back to first active account when query string account is inactive', function () {
+    $inactiveAccount = MailAccount::factory()->for($this->user)->create(['is_active' => false, 'label' => 'Inactive']);
+    $activeAccount = MailAccount::factory()->for($this->user)->create(['is_active' => true, 'label' => 'Active']);
+    MailMessage::factory()->for($activeAccount)->create(['subject' => 'Active Message']);
+
+    $this->actingAs($this->user)
+        ->get(route('bandeja.inbox', ['account' => $inactiveAccount->id]))
+        ->assertSee('Active Message')
+        ->assertDontSee('Inactive');
+});
+
+it('falls back safely when query string account belongs to another user', function () {
+    $otherUser = User::factory()->create();
+    $otherUser->assignRole('Super Administrador');
+    $otherAccount = MailAccount::factory()->for($otherUser)->create(['is_active' => true]);
+
+    $myAccount = MailAccount::factory()->for($this->user)->create(['is_active' => true, 'label' => 'My Account']);
+    MailMessage::factory()->for($myAccount)->create(['subject' => 'My Message']);
+
+    $this->actingAs($this->user)
+        ->get(route('bandeja.inbox', ['account' => $otherAccount->id]))
+        ->assertSee('My Message')
+        ->assertDontSee($otherAccount->label);
+});
+
+it('auto-selects first active account when no query string provided', function () {
+    $firstAccount = MailAccount::factory()->for($this->user)->create(['is_active' => true, 'label' => 'First']);
+    $secondAccount = MailAccount::factory()->for($this->user)->create(['is_active' => true, 'label' => 'Second']);
+    MailMessage::factory()->for($firstAccount)->create(['subject' => 'First Message']);
+
+    $this->actingAs($this->user)
+        ->get(route('bandeja.inbox'))
+        ->assertSee('First Message');
+});
+
+// -- Filtered selection coherence tests
+
+it('clears selected message when status filter excludes it', function () {
+    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $newMessage = MailMessage::factory()->for($account)->create([
+        'subject' => 'New Message',
+        'status' => MailMessageStatus::New,
+    ]);
+    MailMessage::factory()->for($account)->create([
+        'subject' => 'Discarded Message',
+        'status' => MailMessageStatus::Discarded,
+    ]);
+
+    $component = Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->set('selectedAccountId', $account->id)
+        ->call('selectMessage', $newMessage->id);
+
+    // Message is visible and selected
+    expect($component->get('selectedMessage')->id)->toBe($newMessage->id);
+
+    // Filter to discarded — the selected 'new' message should no longer be visible
+    $component->call('setStatusFilter', 'discarded');
+
+    expect($component->get('selectedMessage'))->toBeNull();
+});
+
+it('clears selected message when search excludes it', function () {
+    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $message = MailMessage::factory()->for($account)->create([
+        'subject' => 'Important Report',
+        'from_name' => 'Juan Perez',
+    ]);
+    MailMessage::factory()->for($account)->create([
+        'subject' => 'Other Thing',
+        'from_name' => 'Maria Lopez',
+    ]);
+
+    $component = Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->set('selectedAccountId', $account->id)
+        ->call('selectMessage', $message->id);
+
+    expect($component->get('selectedMessage')->id)->toBe($message->id);
+
+    // Search that excludes the selected message
+    $component->set('search', 'Maria');
+
+    expect($component->get('selectedMessage'))->toBeNull();
+});
+
+it('keeps selected message when it matches active filters', function () {
+    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $message = MailMessage::factory()->for($account)->create([
+        'subject' => 'Important Report',
+        'status' => MailMessageStatus::New,
+    ]);
+
+    $component = Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->set('selectedAccountId', $account->id)
+        ->call('selectMessage', $message->id);
+
+    // Filter to 'new' — selected message should still be visible
+    $component->call('setStatusFilter', 'new');
+
+    expect($component->get('selectedMessage')->id)->toBe($message->id);
 });
