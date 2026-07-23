@@ -6,6 +6,7 @@ use App\Models\MailAccount;
 use App\Models\MailMessage;
 use App\Models\User;
 use App\Services\Bandeja\ImapSyncService;
+use App\Services\Bandeja\ImapMailboxService;
 use App\Services\Bandeja\InboundSuggestionService;
 use Flux\Flux;
 use Illuminate\Support\Facades\Auth;
@@ -25,6 +26,12 @@ new #[Title('Bandeja de entrada')] class extends Component {
     public string $statusFilter = 'all';
     public string $search = '';
     public int $perPage = 15;
+    public string $selectedFolder = 'INBOX';
+    public string $moveTargetFolder = '';
+    /** @var array<int, array{path: string, name: string}> */
+    public array $remoteFolders = [];
+    public ?string $loadedBodyHtml = null;
+    public ?string $loadedBodyText = null;
 
     protected ?User $currentUser = null;
 
@@ -66,6 +73,34 @@ new #[Title('Bandeja de entrada')] class extends Component {
         $this->resetPage();
     }
 
+    public function updatedSelectedFolder(string $folder): void
+    {
+        abort_unless(collect($this->remoteFolders)->contains('path', $folder), 403);
+
+        $this->selectedFolder = $folder;
+        $this->selectedMessageId = null;
+        $this->moveTargetFolder = '';
+        $this->loadedBodyHtml = null;
+        $this->loadedBodyText = null;
+        $this->resetPage();
+    }
+
+    public function loadFolders(): void
+    {
+        abort_unless(Auth::user()->can('bandeja.sincronizar'), 403);
+
+        $account = $this->resolveSelectedAccount();
+        abort_if($account === null, 403);
+
+        $this->remoteFolders = app(ImapMailboxService::class)
+            ->listFolders($account)
+            ->map(fn (array $folder): array => [
+                'path' => $folder['path'],
+                'name' => $folder['name'],
+            ])
+            ->all();
+    }
+
     protected function getUser(): User
     {
         return $this->currentUser ??= Auth::user();
@@ -104,11 +139,21 @@ new #[Title('Bandeja de entrada')] class extends Component {
         $query = MailMessage::query()
             ->where('mail_account_id', $account->id)
             ->with('case')
+            ->where(function ($q) {
+                if ($this->selectedFolder === 'INBOX') {
+                    $q->where('folder', 'INBOX')->orWhereNull('folder');
+                    return;
+                }
+
+                $q->where('folder', $this->selectedFolder);
+            })
             ->when($this->search, function ($q) {
-                $q->where('from_name', 'like', "%{$this->search}%")
-                    ->orWhere('from_email', 'like', "%{$this->search}%")
-                    ->orWhere('subject', 'like', "%{$this->search}%")
-                    ->orWhere('body_text', 'like', "%{$this->search}%");
+                $q->where(function ($searchQuery) {
+                    $searchQuery->where('from_name', 'like', "%{$this->search}%")
+                        ->orWhere('from_email', 'like', "%{$this->search}%")
+                        ->orWhere('subject', 'like', "%{$this->search}%")
+                        ->orWhere('body_text', 'like', "%{$this->search}%");
+                });
             })
             ->when($this->statusFilter !== 'all', fn ($q) => $q->where('status', $this->statusFilter))
             ->orderByDesc('received_at');
@@ -155,6 +200,15 @@ new #[Title('Bandeja de entrada')] class extends Component {
             return new HtmlString('');
         }
 
+        if (filled($this->loadedBodyHtml)) {
+            return new HtmlString($this->sanitizeHtmlBody($this->loadedBodyHtml));
+        }
+
+        if (filled($this->loadedBodyText)) {
+            return new HtmlString(nl2br(e($this->loadedBodyText)));
+        }
+
+        // Keep legacy stored bodies as a read-only fallback for pre-IMAP records.
         if (filled($message->body_html)) {
             return new HtmlString($this->sanitizeHtmlBody($message->body_html));
         }
@@ -249,6 +303,14 @@ new #[Title('Bandeja de entrada')] class extends Component {
 
         return MailMessage::query()
             ->where('mail_account_id', $account->id)
+            ->where(function ($q) {
+                if ($this->selectedFolder === 'INBOX') {
+                    $q->where('folder', 'INBOX')->orWhereNull('folder');
+                    return;
+                }
+
+                $q->where('folder', $this->selectedFolder);
+            })
             ->selectRaw('status, count(*) as count')
             ->groupBy('status')
             ->pluck('count', 'status')
@@ -263,6 +325,47 @@ new #[Title('Bandeja de entrada')] class extends Component {
 
         $message = MailMessage::where('mail_account_id', $account->id)->findOrFail($messageId);
         $this->selectedMessageId = $messageId;
+        $this->loadedBodyHtml = null;
+        $this->loadedBodyText = null;
+
+        if (filled($message->imap_uid) && filled($message->folder)) {
+            $mailbox = app(ImapMailboxService::class);
+
+            try {
+                $content = $mailbox->fetchMessage(
+                    $account,
+                    $message->folder,
+                    (int) $message->imap_uid,
+                );
+                $this->loadedBodyHtml = $content['html'];
+                $this->loadedBodyText = $content['text'];
+            } catch (\Throwable $e) {
+                $this->loadedBodyHtml = null;
+                $this->loadedBodyText = null;
+                Flux::toast(
+                    variant: 'danger',
+                    text: __('No se pudo cargar el mensaje desde IMAP.'),
+                );
+
+                return;
+            }
+
+            try {
+                if ($mailbox->setRead($account, $message->folder, (int) $message->imap_uid) === true) {
+                    $message->update(['is_read' => true]);
+                } else {
+                    Flux::toast(
+                        variant: 'danger',
+                        text: __('No se pudo actualizar el estado de lectura en IMAP.'),
+                    );
+                }
+            } catch (\Throwable $e) {
+                Flux::toast(
+                    variant: 'danger',
+                    text: __('No se pudo actualizar el estado de lectura en IMAP.'),
+                );
+            }
+        }
     }
 
     public function sync(): void
@@ -277,7 +380,9 @@ new #[Title('Bandeja de entrada')] class extends Component {
         $syncService = app(ImapSyncService::class);
 
         try {
-            $messages = $syncService->syncAccount($account);
+            $messages = $this->selectedFolder === 'INBOX'
+                ? $syncService->syncAccount($account)
+                : $syncService->syncAccount($account, $this->selectedFolder);
             Flux::toast(
                 variant: 'success',
                 text: __(':count mensajes sincronizados.', ['count' => $messages->count()]),
@@ -310,6 +415,66 @@ new #[Title('Bandeja de entrada')] class extends Component {
         );
     }
 
+    public function moveMessage(int $messageId, string $targetFolder): void
+    {
+        abort_unless(Auth::user()->can('bandeja.sincronizar'), 403);
+
+        $account = $this->resolveSelectedAccount();
+        abort_if($account === null, 403);
+        abort_unless(collect($this->remoteFolders)->contains('path', $targetFolder), 403);
+
+        $message = MailMessage::where('mail_account_id', $account->id)->findOrFail($messageId);
+        abort_if(blank($message->folder) || blank($message->imap_uid), 422);
+
+        try {
+            $reference = app(ImapMailboxService::class)->moveMessage(
+                $account,
+                $message->folder,
+                (int) $message->imap_uid,
+                $targetFolder,
+            );
+
+            $message->update([
+                'folder' => $reference['folder'],
+                'imap_uid' => $reference['uid'] ?? $message->imap_uid,
+            ]);
+
+            $this->clearSelectedMessage($messageId);
+            Flux::toast(variant: 'success', text: __('Mensaje movido a :folder.', ['folder' => $targetFolder]));
+        } catch (\Throwable) {
+            Flux::toast(variant: 'danger', text: __('No se pudo mover el mensaje en IMAP.'));
+        }
+    }
+
+    public function deleteMessage(int $messageId): void
+    {
+        abort_unless(Auth::user()->can('bandeja.sincronizar'), 403);
+
+        $account = $this->resolveSelectedAccount();
+        abort_if($account === null, 403);
+
+        $message = MailMessage::where('mail_account_id', $account->id)->findOrFail($messageId);
+        abort_if(blank($message->folder) || blank($message->imap_uid), 422);
+
+        try {
+            $reference = app(ImapMailboxService::class)->deleteMessage(
+                $account,
+                $message->folder,
+                (int) $message->imap_uid,
+            );
+
+            $message->update([
+                'folder' => $reference['folder'],
+                'imap_uid' => $reference['uid'] ?? $message->imap_uid,
+            ]);
+
+            $this->clearSelectedMessage($messageId);
+            Flux::toast(variant: 'success', text: __('Mensaje movido a la papelera.'));
+        } catch (\Throwable) {
+            Flux::toast(variant: 'danger', text: __('No se pudo mover el mensaje a la papelera.'));
+        }
+    }
+
     public function suggestNewCase(int $messageId): void
     {
         abort_unless(Auth::user()->can('bandeja.clasificar'), 403);
@@ -328,9 +493,74 @@ new #[Title('Bandeja de entrada')] class extends Component {
         );
     }
 
+    /**
+     * Create a real expediente from the selected inbox message.
+     * Prefills sender email, parsed phone, mail account, and subject mapping.
+     * Associates the message to the new expedient and opens it.
+     */
+    public function createExpedientFromMessage(int $messageId): void
+    {
+        abort_unless(Auth::user()->can('expedientes.crear'), 403);
+
+        $account = $this->resolveSelectedAccount();
+        abort_if($account === null, 403);
+
+        $message = MailMessage::where('mail_account_id', $account->id)->findOrFail($messageId);
+
+        // Parse phone from message body
+        $phoneParser = app(\App\Services\Bandeja\PhoneParserService::class);
+        $senderPhone = $phoneParser->parse($message->body_text ?? $message->body_html ?? '');
+
+        // Generate a unique case number
+        $caseNumber = 'EXP-'.now()->format('YmdHis').'-'.str_pad((string) random_int(0, 999), 3, '0', STR_PAD_LEFT);
+
+        // Map subject to request type (truncate if too long)
+        $requestType = $message->subject ? mb_substr($message->subject, 0, 255) : null;
+
+        // Create the expedient with prefilled data
+        $expedient = Expedient::create([
+            'case_number' => $caseNumber,
+            'sender_email' => $message->from_email,
+            'sender_phone' => $senderPhone,
+            'mail_account_id' => $account->id,
+            'assigned_user_id' => $this->getUser()->id,
+            'status' => \App\Enums\CaseStatus::PendingClient,
+            'request_type' => $requestType,
+        ]);
+
+        // Open the expedient (stamps opened_at + creates Opened milestone)
+        $expedient->open($this->getUser());
+
+        // Associate the message to the new expedient
+        $message->update([
+            'case_id' => $expedient->id,
+            'status' => MailMessageStatus::Associated,
+        ]);
+
+        // Clear the selected message so the reader resets
+        if ($this->selectedMessageId === $messageId) {
+            $this->selectedMessageId = null;
+        }
+
+        Flux::toast(
+            variant: 'success',
+            text: __('Expediente :number creado desde el mensaje.', ['number' => $expedient->case_number]),
+        );
+    }
+
     public function setStatusFilter(string $status): void
     {
         $this->statusFilter = $status;
+    }
+
+    private function clearSelectedMessage(int $messageId): void
+    {
+        if ($this->selectedMessageId === $messageId) {
+            $this->selectedMessageId = null;
+            $this->moveTargetFolder = '';
+            $this->loadedBodyHtml = null;
+            $this->loadedBodyText = null;
+        }
     }
 
     private function statusLabel(MailMessageStatus $status): string
@@ -417,7 +647,7 @@ new #[Title('Bandeja de entrada')] class extends Component {
 
     {{-- Toolbar: search + perPage --}}
     <x-slot:toolbar>
-        <div class="grid grid-cols-[minmax(0,1fr)_88px] items-center gap-2">
+        <div class="grid grid-cols-[minmax(0,1fr)_minmax(140px,auto)_88px] items-center gap-2">
             <div class="min-w-0">
                 <flux:input
                     wire:model.live="search"
@@ -425,6 +655,19 @@ new #[Title('Bandeja de entrada')] class extends Component {
                     :placeholder="__('Buscar por remitente, asunto o contenido...')"
                     class="w-full"
                 />
+            </div>
+
+            <div class="flex items-center gap-1">
+                @can('bandeja.sincronizar')
+                    <flux:button wire:click="loadFolders" size="sm" icon="arrow-path" :aria-label="__('Cargar carpetas IMAP')" />
+                    @if ($remoteFolders !== [])
+                        <flux:select wire:model.live="selectedFolder" size="sm" :aria-label="__('Carpeta IMAP')">
+                            @foreach ($remoteFolders as $folder)
+                                <flux:select.option value="{{ $folder['path'] }}">{{ $folder['name'] }}</flux:select.option>
+                            @endforeach
+                        </flux:select>
+                    @endif
+                @endcan
             </div>
 
             <div class="w-[88px] shrink-0">
@@ -504,7 +747,7 @@ new #[Title('Bandeja de entrada')] class extends Component {
                         @else
                             {{-- No matching expedientes — offer create-new --}}
                             <flux:button
-                                wire:click="suggestNewCase({{ $this->selectedMessage->id }})"
+                                wire:click="createExpedientFromMessage({{ $this->selectedMessage->id }})"
                                 variant="primary"
                                 size="sm"
                                 icon="folder-plus"
@@ -520,6 +763,34 @@ new #[Title('Bandeja de entrada')] class extends Component {
                             icon="trash"
                         >
                             {{ __('Descartar') }}
+                        </flux:button>
+                    @endif
+                @endcan
+
+                @can('bandeja.sincronizar')
+                    @if ($this->selectedMessage && $this->selectedMessage->imap_uid && $this->selectedMessage->folder)
+                        <flux:select wire:model.live="moveTargetFolder" size="sm" :aria-label="__('Mover mensaje a')">
+                            @foreach ($remoteFolders as $folder)
+                                @if ($folder['path'] !== $this->selectedMessage->folder)
+                                    <flux:select.option value="{{ $folder['path'] }}">{{ $folder['name'] }}</flux:select.option>
+                                @endif
+                            @endforeach
+                        </flux:select>
+                        <flux:button
+                            wire:click="moveMessage({{ $this->selectedMessage->id }}, '{{ $moveTargetFolder }}')"
+                            variant="ghost"
+                            size="sm"
+                            icon="folder-arrow-down"
+                        >
+                            {{ __('Mover') }}
+                        </flux:button>
+                        <flux:button
+                            wire:click="deleteMessage({{ $this->selectedMessage->id }})"
+                            variant="danger"
+                            size="sm"
+                            icon="trash"
+                        >
+                            {{ __('Papelera') }}
                         </flux:button>
                     @endif
                 @endcan

@@ -14,6 +14,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'case_id',
     'mail_account_id',
     'message_id',
+    'imap_uid',
     'to_email',
     'subject',
     'from_email',
@@ -31,6 +32,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'bcc',
     'folder',
     'thread_id',
+    'is_read',
 ])]
 class MailMessage extends Model
 {
@@ -52,6 +54,7 @@ class MailMessage extends Model
             'cc' => 'array',
             'bcc' => 'array',
             'references' => 'array',
+            'is_read' => 'boolean',
         ];
     }
 

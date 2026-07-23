@@ -1,9 +1,11 @@
 <?php
 
 use App\Enums\MailMessageStatus;
+use App\Models\Expedient;
 use App\Models\MailAccount;
 use App\Models\MailMessage;
 use App\Models\User;
+use App\Services\Bandeja\ImapMailboxService;
 use App\Services\Bandeja\ImapSyncService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -51,6 +53,125 @@ it('shows active accounts for selection', function () {
     $this->actingAs($this->user)
         ->get(route('bandeja.inbox'))
         ->assertSee($account->label);
+});
+
+it('loads IMAP folders and retrieves an envelope body on demand', function () {
+    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $message = MailMessage::factory()->for($account)->create([
+        'folder' => 'INBOX',
+        'imap_uid' => '42',
+        'body_html' => null,
+        'body_text' => null,
+    ]);
+
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('listFolders')->once()->with(Mockery::type(MailAccount::class))->andReturn(collect([
+        ['path' => 'INBOX', 'name' => 'INBOX'],
+        ['path' => 'Sent', 'name' => 'Sent'],
+    ]));
+    $mailbox->shouldReceive('fetchMessage')->once()->with(Mockery::type(MailAccount::class), 'INBOX', 42)->andReturn([
+        'html' => '<p>Loaded from IMAP</p>',
+        'text' => 'Loaded from IMAP',
+        'headers' => [],
+        'is_read' => false,
+    ]);
+    $mailbox->shouldReceive('setRead')->once()->with(Mockery::type(MailAccount::class), 'INBOX', 42)->andReturnTrue();
+
+    $this->instance(ImapMailboxService::class, $mailbox);
+
+    $component = Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->set('selectedAccountId', $account->id)
+        ->call('loadFolders')
+        ->set('selectedFolder', 'Sent')
+        ->assertSet('selectedFolder', 'Sent')
+        ->set('selectedFolder', 'INBOX')
+        ->call('selectMessage', $message->id);
+
+    expect($component->get('selectedMessageBody')->toHtml())->toContain('Loaded from IMAP')
+        ->and($message->fresh()->is_read)->toBeTrue();
+});
+
+it('does not mark a message read when IMAP rejects the remote flag update', function () {
+    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $message = MailMessage::factory()->for($account)->create([
+        'folder' => 'INBOX',
+        'imap_uid' => '42',
+        'is_read' => false,
+        'body_html' => null,
+        'body_text' => null,
+    ]);
+
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('fetchMessage')->once()->andReturn([
+        'html' => '<p>Loaded from IMAP</p>',
+        'text' => 'Loaded from IMAP',
+        'headers' => [],
+        'is_read' => false,
+    ]);
+    $mailbox->shouldReceive('setRead')->once()->andReturnFalse();
+
+    $this->instance(ImapMailboxService::class, $mailbox);
+
+    $component = Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->set('selectedAccountId', $account->id)
+        ->call('selectMessage', $message->id);
+
+    expect($component->get('selectedMessageBody')->toHtml())->toContain('Loaded from IMAP')
+        ->and($message->fresh()->is_read)->toBeFalse();
+});
+
+it('does not mark a message read when the remote flag update throws', function () {
+    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $message = MailMessage::factory()->for($account)->create([
+        'folder' => 'INBOX',
+        'imap_uid' => '42',
+        'is_read' => false,
+        'body_html' => null,
+        'body_text' => null,
+    ]);
+
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('fetchMessage')->once()->andReturn([
+        'html' => '<p>Loaded from IMAP</p>',
+        'text' => 'Loaded from IMAP',
+        'headers' => [],
+        'is_read' => false,
+    ]);
+    $mailbox->shouldReceive('setRead')->once()->andThrow(new RuntimeException('IMAP unavailable'));
+
+    $this->instance(ImapMailboxService::class, $mailbox);
+
+    Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->set('selectedAccountId', $account->id)
+        ->call('selectMessage', $message->id);
+
+    expect($message->fresh()->is_read)->toBeFalse();
+});
+
+it('keeps the reader usable when fetching an IMAP message fails', function () {
+    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $message = MailMessage::factory()->for($account)->create([
+        'folder' => 'INBOX',
+        'imap_uid' => '42',
+        'body_html' => null,
+        'body_text' => null,
+    ]);
+
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('fetchMessage')->once()->andThrow(new RuntimeException('IMAP unavailable'));
+
+    $this->instance(ImapMailboxService::class, $mailbox);
+
+    Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->set('selectedAccountId', $account->id)
+        ->call('selectMessage', $message->id)
+        ->assertSet('selectedMessageId', $message->id)
+        ->assertSet('loadedBodyHtml', null)
+        ->assertSet('loadedBodyText', null);
 });
 
 it('shows messages for selected account', function () {
@@ -282,6 +403,58 @@ it('cannot use an inactive account for actions', function () {
     expect($message->fresh()->status)->toBe(MailMessageStatus::New);
 });
 
+it('moves a selected message only after remote success and preserves its case', function () {
+    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $expedient = Expedient::factory()->for($account)->create();
+    $message = MailMessage::factory()->for($account)->create([
+        'folder' => 'INBOX',
+        'imap_uid' => '42',
+        'case_id' => $expedient->id,
+    ]);
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('moveMessage')->once()->andReturn(['folder' => 'Archive', 'uid' => 9]);
+    $this->instance(ImapMailboxService::class, $mailbox);
+
+    Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->set('selectedAccountId', $account->id)
+        ->set('remoteFolders', [['path' => 'Archive', 'name' => 'Archive']])
+        ->call('moveMessage', $message->id, 'Archive');
+
+    expect($message->fresh()->folder)->toBe('Archive')
+        ->and($message->fresh()->imap_uid)->toBe('9')
+        ->and($message->fresh()->case_id)->toBe($expedient->id);
+});
+
+it('forbids moving a message without remote-mail permission', function () {
+    $user = User::factory()->create();
+    $user->givePermissionTo('bandeja.ver');
+    $account = MailAccount::factory()->for($user)->create(['is_active' => true]);
+    $message = MailMessage::factory()->for($account)->create(['folder' => 'INBOX', 'imap_uid' => '42']);
+
+    Livewire::actingAs($user)
+        ->test('pages::bandeja.inbox')
+        ->set('selectedAccountId', $account->id)
+        ->call('moveMessage', $message->id, 'Archive')
+        ->assertForbidden();
+});
+
+it('does not update a local message when remote delete fails', function () {
+    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $message = MailMessage::factory()->for($account)->create(['folder' => 'INBOX', 'imap_uid' => '42']);
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('deleteMessage')->once()->andThrow(new RuntimeException('No Trash'));
+    $this->instance(ImapMailboxService::class, $mailbox);
+
+    Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->set('selectedAccountId', $account->id)
+        ->call('deleteMessage', $message->id);
+
+    expect($message->fresh()->folder)->toBe('INBOX')
+        ->and($message->fresh()->imap_uid)->toBe('42');
+});
+
 // -- Search / Pagination tests
 
 it('filters messages by search query on sender name', function () {
@@ -298,6 +471,28 @@ it('filters messages by search query on sender name', function () {
     $component->set('search', 'Juan');
     expect($component->get('messages')->total())->toBe(1);
     expect($component->get('messages')->first()->from_name)->toBe('Juan Perez');
+});
+
+it('does not return a search match from another mail account', function () {
+    $selectedAccount = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $otherAccount = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+
+    MailMessage::factory()->for($selectedAccount)->create([
+        'subject' => 'Unrelated message',
+        'from_name' => 'Selected account sender',
+    ]);
+    MailMessage::factory()->for($otherAccount)->create([
+        'subject' => 'Confidential search match',
+        'from_name' => 'Other account sender',
+    ]);
+
+    $component = Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->set('selectedAccountId', $selectedAccount->id)
+        ->set('search', 'Confidential');
+
+    expect($component->get('messages')->total())->toBe(0)
+        ->and($component->get('messages')->getCollection())->toBeEmpty();
 });
 
 it('filters messages by search query on subject', function () {

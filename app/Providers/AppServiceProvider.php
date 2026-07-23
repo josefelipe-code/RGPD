@@ -3,6 +3,8 @@
 namespace App\Providers;
 
 use App\Models\User;
+use App\Services\Bandeja\ImapProvider;
+use App\Services\Bandeja\WebklexImapProvider;
 use App\Services\MailAccountConfigService;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Date;
@@ -19,6 +21,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->singleton(MailAccountConfigService::class);
+        $this->app->bind(ImapProvider::class, WebklexImapProvider::class);
     }
 
     /**

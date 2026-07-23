@@ -12,9 +12,11 @@ use Illuminate\Support\Collection;
  * Returns a collection of arrays with keys: expedient, confidence, reason.
  * Suggestions are NEVER auto-linked — the user must confirm.
  *
- * Match priority (for PR2): email match, email+phone match.
- * Phone-alone is never sufficient (anti-false-link guard).
- * In-Reply-To matching against outgoing messages is deferred to PR4.
+ * Match priority (per spec REQ-MAIL-PROVIDER-DETECTION):
+ *   1. In-Reply-To → outgoing message_id (highest confidence)
+ *   2. Email anchor + phone corroboration (high/medium)
+ *   3. Subject fallback (low — deferred)
+ * Phone-alone is never sufficient (anti-false-link guard, D7).
  */
 class InboundSuggestionService
 {
@@ -25,6 +27,12 @@ class InboundSuggestionService
      */
     public function suggest(MailMessage $message): Collection
     {
+        // Priority 1: In-Reply-To match against outgoing messages (S19).
+        $inReplyToMatch = $this->matchInReplyTo($message);
+        if ($inReplyToMatch !== null) {
+            return collect([$inReplyToMatch]);
+        }
+
         $email = filled($message->from_email) ? $message->from_email : null;
         $phone = filled($message->sender_phone) ? $message->sender_phone : null;
 
@@ -52,6 +60,44 @@ class InboundSuggestionService
         }
 
         return $results->unique('expedient.id');
+    }
+
+    /**
+     * Match inbound message by In-Reply-To header against outgoing message_id.
+     *
+     * Returns the highest-confidence suggestion if a match is found, or null.
+     */
+    protected function matchInReplyTo(MailMessage $message): ?array
+    {
+        if (blank($message->in_reply_to)) {
+            return null;
+        }
+
+        $outgoing = MailMessage::query()
+            ->outgoing()
+            ->where('mail_account_id', $message->mail_account_id)
+            ->where('message_id', $message->in_reply_to)
+            ->whereNotNull('case_id')
+            ->first();
+
+        if ($outgoing === null || $outgoing->case_id === null) {
+            return null;
+        }
+
+        $expedient = Expedient::query()
+            ->where('id', $outgoing->case_id)
+            ->open()
+            ->first();
+
+        if ($expedient === null) {
+            return null;
+        }
+
+        return [
+            'expedient' => $expedient,
+            'confidence' => 'highest',
+            'reason' => 'In-Reply-To match',
+        ];
     }
 
     /**
