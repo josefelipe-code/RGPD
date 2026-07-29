@@ -34,6 +34,7 @@ class Template extends Model
     /**
      * Scope a query to only active templates.
      */
+    /** Limita plantillas a las disponibles para la composición. */
     public function scopeActive($query)
     {
         return $query->where('is_active', true);
@@ -42,6 +43,7 @@ class Template extends Model
     /**
      * Scope a query to templates with a specific purpose.
      */
+    /** Limita plantillas al propósito seleccionado por el compositor. */
     public function scopeForPurpose($query, string $purpose)
     {
         return $query->where('purpose', $purpose);

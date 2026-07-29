@@ -1,82 +1,61 @@
 <?php
 
 use App\Enums\CaseStatus;
-use App\Enums\MailDirection;
 use App\Enums\MilestoneAction;
 use App\Models\Expedient;
 use App\Models\MailAccount;
 use App\Models\MailMessage;
 use App\Models\User;
+use App\Services\Bandeja\MailBridgeService;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Mail;
 
 uses(RefreshDatabase::class)->in(__DIR__);
 
 beforeEach(function () {
     $this->seed(RolesAndPermissionsSeeder::class);
-    $this->user = User::factory()->create();
-    $this->user->assignRole('Super Administrador');
-    $this->account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $this->owner = User::factory()->create();
+    $this->account = MailAccount::factory()->for($this->owner)->create(['is_active' => true]);
+    $this->service = app(MailBridgeService::class);
 });
 
-// S17: Reply transitions to pending_client
-it('transitions expedient to pending_client when replyClient is called', function () {
-    $expedient = Expedient::factory()->for($this->account)->create([
-        'status' => CaseStatus::PendingProvider,
-    ]);
-    $outgoing = MailMessage::factory()->for($this->account)->outgoing()->create([
-        'case_id' => $expedient->id,
-        'direction' => MailDirection::Outgoing,
-    ]);
+test('provider outreach sends only after phone validation and records the transition', function () {
+    Mail::fake();
+    $expedient = Expedient::factory()->for($this->account)->create(['status' => CaseStatus::PendingClient]);
+    $origin = MailMessage::factory()->for($this->account)->create(['case_id' => $expedient->id]);
 
-    $milestone = $expedient->replyClient($outgoing, $this->user);
+    expect(fn () => $this->service->send($this->account, 'forward_provider', $origin, $expedient, $this->owner, [
+        'to' => 'provider@example.com', 'body' => 'Body', 'subject' => 'Subject',
+    ]))->toThrow(LogicException::class);
+    Mail::assertNothingQueued();
 
-    expect($expedient->fresh()->status)->toBe(CaseStatus::PendingClient)
-        ->and($milestone->action)->toBe(MilestoneAction::RepliedClient)
-        ->and($milestone->user_id)->toBe($this->user->id)
-        ->and($milestone->mail_message_id)->toBe($outgoing->id);
-});
-
-// S18: Forward transitions to pending_provider
-it('transitions expedient to pending_provider when forwardProvider is called', function () {
-    $expedient = Expedient::factory()->for($this->account)->create([
-        'status' => CaseStatus::PendingClient,
+    $expedient->validatePhone($this->owner);
+    $outgoing = $this->service->send($this->account, 'forward_provider', $origin, $expedient, $this->owner, [
+        'to' => 'provider@example.com', 'body' => 'Body', 'subject' => 'Subject',
     ]);
-    $outgoing = MailMessage::factory()->for($this->account)->outgoing()->create([
-        'case_id' => $expedient->id,
-        'direction' => MailDirection::Outgoing,
-    ]);
-
-    $milestone = $expedient->forwardProvider($outgoing, $this->user);
 
     expect($expedient->fresh()->status)->toBe(CaseStatus::PendingProvider)
-        ->and($milestone->action)->toBe(MilestoneAction::RepliedProvider)
-        ->and($milestone->user_id)->toBe($this->user->id)
-        ->and($milestone->mail_message_id)->toBe($outgoing->id);
+        ->and($expedient->milestones()->action(MilestoneAction::RepliedProvider)->first()->mail_message_id)->toBe($outgoing->id);
 });
 
-// S25: Milestone links outbound message
-it('creates milestone with mail_message_id link', function () {
-    $expedient = Expedient::factory()->for($this->account)->create();
-    $outgoing = MailMessage::factory()->for($this->account)->outgoing()->create([
-        'case_id' => $expedient->id,
-    ]);
+test('mail bridge rejects concluded expedients before sending', function () {
+    Mail::fake();
+    $expedient = Expedient::factory()->for($this->account)->concluded()->create();
+    $origin = MailMessage::factory()->for($this->account)->create(['case_id' => $expedient->id]);
 
-    $milestone = $expedient->replyClient($outgoing, $this->user);
-
-    expect($milestone->mail_message_id)->toBe($outgoing->id)
-        ->and($milestone->case_id)->toBe($expedient->id);
+    expect(fn () => $this->service->send($this->account, 'reply_client', $origin, $expedient, $this->owner, [
+        'body' => 'Body', 'subject' => 'Subject',
+    ]))->toThrow(LogicException::class);
+    Mail::assertNothingQueued();
 });
 
-// S26: Manual milestones have no link (existing behavior, regression guard)
-it('does not set mail_message_id on manual milestones', function () {
+test('mail bridge requires ownership of the expedient mail account', function () {
     $expedient = Expedient::factory()->for($this->account)->create();
+    $origin = MailMessage::factory()->for($this->account)->create(['case_id' => $expedient->id]);
 
-    $milestone = $expedient->milestones()->create([
-        'user_id' => $this->user->id,
-        'action' => MilestoneAction::RepliedClient,
-        'notes' => 'Manual milestone',
-    ]);
-
-    expect($milestone->mail_message_id)->toBeNull();
+    expect(fn () => $this->service->send($this->account, 'reply_client', $origin, $expedient, User::factory()->create(), [
+        'body' => 'Body', 'subject' => 'Subject',
+    ]))->toThrow(AuthorizationException::class);
 });

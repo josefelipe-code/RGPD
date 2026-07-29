@@ -117,7 +117,30 @@ it('registers dynamic SMTP mailer at runtime', function () {
     expect($mailerName)->toBeString()
         ->and(config("mail.mailers.{$mailerName}"))->toBeArray()
         ->and(config("mail.mailers.{$mailerName}.host"))->toBe('smtp.custom.com')
-        ->and(config("mail.mailers.{$mailerName}.port"))->toBe(587);
+        ->and(config("mail.mailers.{$mailerName}.port"))->toBe(587)
+        ->and(config("mail.mailers.{$mailerName}.scheme"))->toBe('smtp');
+});
+
+it('maps SSL encryption to the SMTPS scheme when registering a dynamic mailer', function () {
+    $account = MailAccount::factory()->for($this->user)->create([
+        'smtp_encryption' => 'ssl',
+        'smtp_port' => 465,
+    ]);
+
+    $mailerName = app(MailAccountConfigService::class)->registerSmtpMailer($account);
+
+    expect(config("mail.mailers.{$mailerName}.scheme"))->toBe('smtps');
+});
+
+it('preserves Laravel default SMTP scheme selection without encryption', function () {
+    $account = MailAccount::factory()->for($this->user)->create([
+        'smtp_encryption' => 'none',
+        'smtp_port' => 2525,
+    ]);
+
+    $mailerName = app(MailAccountConfigService::class)->registerSmtpMailer($account);
+
+    expect(array_key_exists('scheme', config("mail.mailers.{$mailerName}")))->toBeFalse();
 });
 
 it('returns consistent mailer name for same account', function () {

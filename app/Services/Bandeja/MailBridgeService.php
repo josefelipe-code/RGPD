@@ -10,6 +10,7 @@ use App\Models\MailAccount;
 use App\Models\MailMessage;
 use App\Models\User;
 use App\Services\MailAccountConfigService;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 
@@ -17,10 +18,11 @@ use Illuminate\Support\Facades\Mail;
  * Transactional send pipeline for the mail bridge.
  *
  * Wraps SMTP send + outgoing MailMessage persistence + expedient transition
- * in a single DB::transaction. If SMTP throws, nothing persists (S16/S19).
+ * en una única transacción DB. Si SMTP falla, no se persiste nada (S16/S19).
  */
 class MailBridgeService
 {
+    /** Recibe las dependencias usadas para enviar y registrar correos de expedientes. */
     public function __construct(
         protected MailAccountConfigService $configService,
     ) {}
@@ -31,6 +33,7 @@ class MailBridgeService
      * @param  'reply_client'|'forward_provider'  $mode
      * @param  array{to?: string, body: string, subject: string, cc?: array<int,string>, bcc?: array<int,string>, template_id?: int}  $payload
      */
+    /** Envía y registra un correo desde el compositor del expediente. */
     public function send(
         MailAccount $account,
         string $mode,
@@ -39,6 +42,21 @@ class MailBridgeService
         User $actor,
         array $payload,
     ): MailMessage {
+        if ($account->id !== $expedient->mail_account_id || $origin->case_id !== $expedient->id || $origin->mail_account_id !== $account->id) {
+            throw new \LogicException('The mail account or source message does not belong to this expedient.');
+        }
+
+        if ($account->user_id !== $actor->id) {
+            throw new AuthorizationException('You do not own this mail account.');
+        }
+
+        match ($mode) {
+            'reply_client' => $expedient->assertCanReplyClient(),
+            'forward_provider' => $expedient->assertCanForwardProvider(),
+            default => throw new \InvalidArgumentException('Invalid expedient mail mode.'),
+        };
+
+        // La closure mantiene juntos el envío y el registro del mensaje del expediente.
         return DB::transaction(function () use ($account, $mode, $origin, $expedient, $actor, $payload) {
             $to = $mode === 'reply_client'
                 ? ($payload['to'] ?? $origin->from_email ?? $expedient->sender_email)
@@ -49,7 +67,7 @@ class MailBridgeService
             $cc = $payload['cc'] ?? [];
             $bcc = $payload['bcc'] ?? [];
 
-            // Register dynamic SMTP mailer for this account
+            // Registra el mailer SMTP dinámico de esta cuenta.
             $mailerName = $this->configService->registerSmtpMailer($account);
 
             // Send the mail (may throw — transaction will rollback)

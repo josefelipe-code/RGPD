@@ -16,6 +16,9 @@ class ResetUserPassword implements ResetsUserPasswords
      *
      * @param  array<string, string>  $input
      */
+    /**
+     * Valida y actualiza la contraseña cuando Fortify procesa un reinicio.
+     */
     public function reset(User $user, array $input): void
     {
         Validator::make($input, [

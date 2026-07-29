@@ -10,6 +10,7 @@ class Logout
     /**
      * Log the current user out of the application.
      */
+    /** Cierra la sesión y redirige al flujo de autenticación de la aplicación. */
     public function __invoke()
     {
         Auth::guard('web')->logout();

@@ -1,6 +1,5 @@
 <?php
 
-use App\Enums\CaseStatus;
 use App\Models\Expedient;
 use App\Models\MailAccount;
 use App\Models\User;
@@ -28,9 +27,9 @@ new #[Title('Expedientes')] class extends Component {
     public string $senderPhone = '';
     public ?int $mailAccountId = null;
     public ?int $assignedUserId = null;
-    public string $status = '';
     public ?string $requestType = '';
 
+    /** Livewire inicializa filtros y datos del formulario de expedientes. */
     public function mount(): void
     {
         abort_unless(Auth::user()->can('expedientes.ver'), 403);
@@ -47,27 +46,30 @@ new #[Title('Expedientes')] class extends Component {
             'senderPhone' => ['nullable', 'string', 'max:50'],
             'mailAccountId' => ['required', 'integer', 'exists:mail_accounts,id'],
             'assignedUserId' => ['required', 'integer', 'exists:users,id'],
-            'status' => ['required', Rule::enum(CaseStatus::class)],
             'requestType' => ['nullable', 'string', 'max:255'],
         ];
     }
 
+    /** Livewire reinicia la paginación al cambiar la búsqueda. */
     public function updatedSearch(): void
     {
         $this->resetPage();
     }
 
+    /** Livewire reinicia la paginación al cambiar el estado filtrado. */
     public function updatedStatusFilter(): void
     {
         $this->resetPage();
     }
 
+    /** Livewire reinicia la paginación al cambiar la cuenta filtrada. */
     public function updatedMailAccountIdFilter(): void
     {
         $this->resetPage();
     }
 
     #[Computed]
+    /** Computed que filtra y pagina expedientes visibles. */
     public function expedients()
     {
         /** @var User $user */
@@ -87,6 +89,7 @@ new #[Title('Expedientes')] class extends Component {
     }
 
     #[Computed]
+    /** Computed que calcula contadores de estado para los filtros. */
     public function statusCounts(): array
     {
         return Expedient::query()
@@ -99,24 +102,27 @@ new #[Title('Expedientes')] class extends Component {
     }
 
     #[Computed]
+    /** Computed que lista cuentas activas disponibles para filtrar o asociar. */
     public function mailAccounts()
     {
         return MailAccount::query()->where('is_active', true)->orderBy('label')->get();
     }
 
     #[Computed]
+    /** Computed que lista usuarios disponibles para asignación. */
     public function availableUsers()
     {
         return User::query()->orderBy('name')->get();
     }
 
+    /** Acción `wire:click` que abre el alta de un expediente. */
     public function create(): void
     {
         $this->authorizeAbility('expedientes.crear');
         $this->resetForm();
-        $this->status = CaseStatus::PendingClient->value;
     }
 
+    /** Acción `wire:click` que carga un expediente para edición. */
     public function edit(int $expedientId): void
     {
         $this->authorizeAbility('expedientes.actualizar');
@@ -129,12 +135,12 @@ new #[Title('Expedientes')] class extends Component {
         $this->senderPhone = $expedient->sender_phone ?? '';
         $this->mailAccountId = $expedient->mail_account_id;
         $this->assignedUserId = $expedient->assigned_user_id;
-        $this->status = $expedient->status->value;
         $this->requestType = $expedient->request_type ?? '';
 
         $this->resetErrorBag();
     }
 
+    /** Acción `wire:submit` que valida y guarda el expediente. */
     public function save(): void
     {
         $isCreating = $this->editingExpedientId === null;
@@ -150,13 +156,10 @@ new #[Title('Expedientes')] class extends Component {
                 'sender_phone' => $validated['senderPhone'] ?: null,
                 'mail_account_id' => $validated['mailAccountId'],
                 'assigned_user_id' => $validated['assignedUserId'],
-                'status' => $validated['status'],
+                'status' => \App\Enums\CaseStatus::PendingClient,
                 'request_type' => $validated['requestType'] ?: null,
             ])
             : tap(Expedient::query()->findOrFail($this->editingExpedientId), function (Expedient $expedient) use ($validated): void {
-                $oldStatus = $expedient->status;
-                $statusChanged = $oldStatus->value !== $validated['status'];
-
                 $expedient->update([
                     'case_number' => $validated['caseNumber'],
                     'sender_email' => $validated['senderEmail'] ?: null,
@@ -166,12 +169,6 @@ new #[Title('Expedientes')] class extends Component {
                     'request_type' => $validated['requestType'] ?: null,
                 ]);
 
-                if ($statusChanged) {
-                    $expedient->transitionTo(
-                        CaseStatus::from($validated['status']),
-                        Auth::user()
-                    );
-                }
             });
 
         if ($isCreating) {
@@ -187,12 +184,14 @@ new #[Title('Expedientes')] class extends Component {
             : __('Expediente actualizado.'));
     }
 
+    /** Acción `wire:click` que cancela y limpia la edición. */
     public function cancel(): void
     {
         $this->resetForm();
         Flux::modal('expedient-form')->close();
     }
 
+    /** Acción `wire:click` que elimina un expediente autorizado. */
     public function delete(int $expedientId): void
     {
         $this->authorizeAbility('expedientes.eliminar');
@@ -206,16 +205,19 @@ new #[Title('Expedientes')] class extends Component {
         Flux::toast(variant: 'success', text: __('Expediente eliminado.'));
     }
 
+    /** Acción `wire:click` que prepara la confirmación de eliminación. */
     public function confirmDelete(int $expedientId): void
     {
         $this->pendingDeleteId = $expedientId;
     }
 
+    /** Comprueba el permiso requerido por las operaciones de expedientes. */
     private function authorizeAbility(string $ability): void
     {
         abort_unless(Auth::user()->can($ability), 403);
     }
 
+    /** Restablece el formulario y el expediente en edición. */
     private function resetForm(): void
     {
         $this->reset([
@@ -225,13 +227,13 @@ new #[Title('Expedientes')] class extends Component {
             'senderPhone',
             'mailAccountId',
             'assignedUserId',
-            'status',
             'requestType',
         ]);
 
         $this->resetErrorBag();
     }
 
+    /** Traduce el estado del expediente para la tabla y los filtros. */
     private function statusLabel(string $status): string
     {
         return match ($status) {
@@ -242,6 +244,7 @@ new #[Title('Expedientes')] class extends Component {
         };
     }
 
+    /** Selecciona el color de insignia para el estado mostrado. */
     private function statusBadgeColor(string $status): string
     {
         return match ($status) {
@@ -370,15 +373,6 @@ new #[Title('Expedientes')] class extends Component {
 
             <form wire:submit="save" class="space-y-5">
                 <flux:input wire:model="caseNumber" :label="__('Número de expediente')" type="text" required />
-
-                <flux:field>
-                    <flux:label>{{ __('Estado') }}</flux:label>
-                    <flux:select wire:model="status" required>
-                        <flux:select.option value="pending_client">{{ __('Pendiente del cliente') }}</flux:select.option>
-                        <flux:select.option value="pending_provider">{{ __('Pendiente del proveedor') }}</flux:select.option>
-                        <flux:select.option value="concluded">{{ __('Concluido') }}</flux:select.option>
-                    </flux:select>
-                </flux:field>
 
                 <flux:field>
                     <flux:label>{{ __('Tipo de solicitud') }}</flux:label>

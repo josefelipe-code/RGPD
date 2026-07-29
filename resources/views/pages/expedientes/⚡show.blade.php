@@ -1,13 +1,10 @@
 <?php
 
-use App\Enums\CaseStatus;
 use App\Enums\MilestoneAction;
-use App\Models\CaseMilestone;
 use App\Models\Expedient;
 use App\Models\User;
 use Flux\Flux;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Validation\Rule;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Title;
 use Livewire\Component;
@@ -15,36 +12,19 @@ use Livewire\Component;
 new #[Title('Detalle del Expediente')] class extends Component {
     public Expedient $expedient;
 
-    // Inline status control
-    public ?string $statusTarget = null;
-
-    // Add milestone form
-    public string $milestoneAction = '';
-    public string $milestoneNotes = '';
-
     // Mail composer state
     public ?string $composerMode = null;
     public ?int $composerOriginMessageId = null;
 
+    /** Livewire recibe el expediente de la ruta y prepara el formulario de hitos. */
     public function mount(Expedient $expedient): void
     {
         $this->expedient = $expedient;
         abort_unless(Auth::user()->can('expedientes.ver'), 403);
     }
 
-    /**
-     * @return array<string, array<int, mixed>>
-     */
-    protected function rules(): array
-    {
-        return [
-            'milestoneAction' => ['required', Rule::enum(MilestoneAction::class)],
-            'milestoneNotes' => ['nullable', 'string', 'max:1000'],
-            'statusTarget' => ['nullable', Rule::enum(CaseStatus::class)],
-        ];
-    }
-
     #[Computed]
+    /** Computed que carga los hitos visibles en el detalle del expediente. */
     public function milestones()
     {
         return $this->expedient
@@ -55,6 +35,7 @@ new #[Title('Detalle del Expediente')] class extends Component {
     }
 
     #[Computed]
+    /** Computed que obtiene expedientes relacionados para la vista de detalle. */
     public function related()
     {
         return $this->expedient
@@ -68,6 +49,7 @@ new #[Title('Detalle del Expediente')] class extends Component {
     }
 
     #[Computed]
+    /** Computed que obtiene mensajes asociados al expediente. */
     public function associatedMessages()
     {
         return $this->expedient
@@ -78,49 +60,48 @@ new #[Title('Detalle del Expediente')] class extends Component {
     }
 
     #[Computed]
+    /** Computed que lista usuarios habilitados para asignación. */
     public function availableUsers()
     {
         return User::query()->orderBy('name')->get();
     }
 
-    public function changeStatus(): void
+    public function validatePhone(): void
     {
         abort_unless(Auth::user()->can('expedientes.actualizar'), 403);
-
-        $validated = $this->validate([
-            'statusTarget' => ['required', Rule::enum(CaseStatus::class)],
-        ]);
-
-        $this->expedient->transitionTo(
-            CaseStatus::from($validated['statusTarget']),
-            Auth::user()
-        );
-
-        $this->statusTarget = null;
-
-        Flux::toast(variant: 'success', text: __('Estado actualizado.'));
+        $this->expedient->validatePhone(Auth::user());
+        Flux::toast(variant: 'success', text: __('Teléfono validado.'));
     }
 
-    public function addMilestone(): void
+    public function confirmProvider(): void
     {
-        abort_unless(Auth::user()->can('hitos.crear'), 403);
-
-        $validated = $this->validate();
-
-        $this->expedient->milestones()->create([
-            'user_id' => Auth::id(),
-            'action' => $validated['milestoneAction'],
-            'notes' => $validated['milestoneNotes'] ?: null,
-        ]);
-
-        $this->reset(['milestoneAction', 'milestoneNotes']);
-
-        Flux::toast(variant: 'success', text: __('Hito registrado.'));
+        abort_unless(Auth::user()->can('expedientes.actualizar'), 403);
+        $this->expedient->confirmProvider(Auth::user());
+        Flux::toast(variant: 'success', text: __('Confirmación del proveedor registrada.'));
     }
 
+    public function markClientFingerprintSent(): void
+    {
+        abort_unless(Auth::user()->can('expedientes.actualizar'), 403);
+        $this->expedient->markClientFingerprintSent(Auth::user());
+        Flux::toast(variant: 'success', text: __('Envío de huella al cliente registrado.'));
+    }
+
+    /** Acción `wire:click` que abre el compositor para un mensaje asociado. */
     public function openComposer(string $mode, int $messageId): void
     {
         abort_unless(Auth::user()->can('expedientes.actualizar'), 403);
+
+        abort_unless(in_array($mode, ['reply_client', 'forward_provider'], true), 404);
+        abort_unless($this->expedient->mailAccount?->user_id === Auth::id(), 403);
+
+        if ($mode === 'reply_client') {
+            $this->expedient->assertCanReplyClient();
+        } else {
+            $this->expedient->assertCanForwardProvider();
+        }
+
+        abort_unless($this->expedient->mailMessages()->whereKey($messageId)->where('mail_account_id', $this->expedient->mail_account_id)->exists(), 404);
 
         $this->composerMode = $mode;
         $this->composerOriginMessageId = $messageId;
@@ -128,48 +109,62 @@ new #[Title('Detalle del Expediente')] class extends Component {
         Flux::modal('mail-composer')->show();
     }
 
+    /** Acción `wire:click` que cierra el compositor embebido. */
     public function closeComposer(): void
     {
         $this->composerMode = null;
         $this->composerOriginMessageId = null;
     }
 
+    /** Traduce la acción de un hito para la etiqueta mostrada en la vista. */
     private function milestoneLabel(string $action): string
     {
         return match ($action) {
             'opened' => __('Apertura'),
             'replied_client' => __('Respuesta al cliente'),
             'replied_provider' => __('Respuesta al proveedor'),
+            'phone_validated' => __('Teléfono validado'),
+            'provider_confirmed' => __('Confirmación del proveedor'),
+            'client_fingerprint_sent' => __('Huella enviada al cliente'),
             'closed' => __('Cierre'),
             'reopened' => __('Reapertura'),
             default => $action,
         };
     }
 
+    /** Selecciona el icono Flux correspondiente a un hito. */
     private function milestoneIcon(string $action): string
     {
         return match ($action) {
             'opened' => 'folder-open',
             'replied_client' => 'paper-airplane',
             'replied_provider' => 'paper-airplane',
+            'phone_validated' => 'phone',
+            'provider_confirmed' => 'check-circle',
+            'client_fingerprint_sent' => 'document-check',
             'closed' => 'lock-closed',
             'reopened' => 'arrow-path',
             default => 'document',
         };
     }
 
+    /** Selecciona el color de insignia correspondiente a un hito. */
     private function milestoneColor(string $action): string
     {
         return match ($action) {
             'opened' => 'blue',
             'replied_client' => 'green',
             'replied_provider' => 'amber',
+            'phone_validated' => 'blue',
+            'provider_confirmed' => 'green',
+            'client_fingerprint_sent' => 'green',
             'closed' => 'red',
             'reopened' => 'purple',
             default => 'zinc',
         };
     }
 
+    /** Traduce el estado del expediente para la interfaz. */
     private function statusLabel(string $status): string
     {
         return match ($status) {
@@ -180,6 +175,7 @@ new #[Title('Detalle del Expediente')] class extends Component {
         };
     }
 
+    /** Selecciona el color de insignia del estado del expediente. */
     private function statusBadgeColor(string $status): string
     {
         return match ($status) {
@@ -257,29 +253,26 @@ new #[Title('Detalle del Expediente')] class extends Component {
         </div>
     </flux:card>
 
-    {{-- Inline status control --}}
     @can('expedientes.actualizar')
         <flux:card>
-            <flux:heading size="md">{{ __('Cambiar estado') }}</flux:heading>
-            <flux:text variant="subtle" size="sm" class="mb-3">{{ __('Actualizá el estado del expediente. Los cambios se registran automáticamente en el historial.') }}</flux:text>
+            <flux:heading size="md">{{ __('Acciones del ciclo de vida') }}</flux:heading>
+            <flux:text variant="subtle" size="sm" class="mb-3">{{ __('Las acciones disponibles dependen del estado actual y quedan registradas en el historial.') }}</flux:text>
 
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-end">
-                <flux:field class="flex-1">
-                    <flux:label>{{ __('Nuevo estado') }}</flux:label>
-                    <flux:select wire:model="statusTarget">
-                        <flux:select.option value="">{{ __('Seleccionar...') }}</flux:select.option>
-                        @if ($expedient->status === \App\Enums\CaseStatus::Concluded)
-                            <flux:select.option value="pending_client">{{ __('Pendiente del cliente') }}</flux:select.option>
-                            <flux:select.option value="pending_provider">{{ __('Pendiente del proveedor') }}</flux:select.option>
-                        @else
-                            <flux:select.option value="concluded">{{ __('Concluido') }}</flux:select.option>
-                        @endif
-                    </flux:select>
-                </flux:field>
+            <div class="flex flex-wrap gap-2">
+                @if ($expedient->status->value === 'pending_client' && ! $expedient->phone_validated_at)
+                    <flux:button variant="primary" wire:click="validatePhone" icon="phone">
+                        {{ __('Confirmar validación telefónica') }}
+                    </flux:button>
+                @endif
 
-                <flux:button variant="primary" wire:click="changeStatus" icon="check" :disabled="! $statusTarget">
-                    {{ __('Aplicar') }}
-                </flux:button>
+                @if ($expedient->status->value === 'pending_provider')
+                    <flux:button variant="primary" wire:click="confirmProvider" icon="check-circle">
+                        {{ __('Registrar confirmación del proveedor') }}
+                    </flux:button>
+                    <flux:button variant="primary" wire:click="markClientFingerprintSent" icon="document-check">
+                        {{ __('Marcar huella enviada al cliente') }}
+                    </flux:button>
+                @endif
             </div>
         </flux:card>
     @endcan
@@ -331,7 +324,7 @@ new #[Title('Detalle del Expediente')] class extends Component {
                     <flux:text variant="subtle" size="xs">{{ $message->received_at?->format('d/m/Y H:i') ?? '—' }}</flux:text>
                 </div>
                 @can('expedientes.actualizar')
-                    @if ($message->direction->value === 'incoming')
+                    @if ($message->direction->value === 'incoming' && $expedient->status->value !== 'concluded')
                         <div class="flex gap-1 shrink-0">
                             <flux:button
                                 variant="ghost"
@@ -363,33 +356,6 @@ new #[Title('Detalle del Expediente')] class extends Component {
     {{-- Sección de hitos --}}
     <div class="space-y-4">
         <flux:heading size="lg">{{ __('Historial de hitos') }}</flux:heading>
-
-        {{-- Agregar hito --}}
-        @can('hitos.crear')
-            <flux:card>
-                <form wire:submit="addMilestone" class="flex flex-col gap-4 sm:flex-row sm:items-end">
-                    <flux:field class="flex-1">
-                        <flux:label>{{ __('Acción') }}</flux:label>
-                        <flux:select wire:model="milestoneAction" required>
-                            <flux:select.option value="">{{ __('Seleccionar acción...') }}</flux:select.option>
-                            <flux:select.option value="opened">{{ __('Apertura') }}</flux:select.option>
-                            <flux:select.option value="replied_client">{{ __('Respuesta al cliente') }}</flux:select.option>
-                            <flux:select.option value="replied_provider">{{ __('Respuesta al proveedor') }}</flux:select.option>
-                            <flux:select.option value="closed">{{ __('Cierre') }}</flux:select.option>
-                        </flux:select>
-                    </flux:field>
-
-                    <flux:field class="flex-[2]">
-                        <flux:label>{{ __('Notas') }}</flux:label>
-                        <flux:input wire:model="milestoneNotes" :placeholder="__('Observaciones opcionales...')" />
-                    </flux:field>
-
-                    <flux:button variant="primary" type="submit" icon="plus">
-                        {{ __('Agregar') }}
-                    </flux:button>
-                </form>
-            </flux:card>
-        @endcan
 
         {{-- Timeline de hitos --}}
         <div class="space-y-3">

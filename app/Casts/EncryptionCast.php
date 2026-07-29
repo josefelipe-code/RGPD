@@ -17,6 +17,7 @@ class EncryptionCast implements CastsAttributes
 {
     private const ALLOWED = ['ssl', 'tls', 'starttls', 'none', null, ''];
 
+    /** Descifra un atributo cuando Eloquent lo lee desde la cuenta de correo. */
     public function get(Model $model, string $key, mixed $value, array $attributes): ?string
     {
         if ($value === null || $value === '' || $value === 'none') {
@@ -34,6 +35,7 @@ class EncryptionCast implements CastsAttributes
         return $normalized === 'starttls' ? 'tls' : $normalized;
     }
 
+    /** Cifra un atributo sensible antes de que Eloquent lo persista. */
     public function set(Model $model, string $key, mixed $value, array $attributes): ?string
     {
         if ($value === null || $value === '' || $value === 'none') {

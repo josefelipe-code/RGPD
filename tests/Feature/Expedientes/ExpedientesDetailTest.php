@@ -148,7 +148,7 @@ test('detail page shows multiple milestones in reverse chronological order', fun
 
 // Add milestone tests
 
-test('user without hitos.crear cannot see add milestone form', function () {
+test('manual lifecycle milestones are not exposed in the detail page', function () {
     $expedient = Expedient::factory()->create();
     $user = User::factory()->create();
     $user->givePermissionTo('expedientes.ver');
@@ -158,51 +158,17 @@ test('user without hitos.crear cannot see add milestone form', function () {
         ->assertDontSee('Agregar');
 });
 
-test('user with hitos.crear can see add milestone form', function () {
+test('manual lifecycle milestones remain unavailable with hitos permission', function () {
     $expedient = Expedient::factory()->create();
     $user = User::factory()->create();
     $user->givePermissionTo(['expedientes.ver', 'hitos.crear']);
 
     $this->actingAs($user)
         ->get(route('expedientes.show', $expedient))
-        ->assertSee('Agregar');
+        ->assertDontSee('Agregar');
 });
 
-test('can add a milestone via Livewire component', function () {
-    $expedient = Expedient::factory()->create();
-
-    $this->actingAs($this->admin);
-
-    Livewire::test('pages::expedientes.show', ['expedient' => $expedient])
-        ->set('milestoneAction', MilestoneAction::RepliedClient->value)
-        ->set('milestoneNotes', 'Se respondió la consulta del cliente')
-        ->call('addMilestone')
-        ->assertHasNoErrors();
-
-    $this->assertDatabaseHas('case_milestones', [
-        'case_id' => $expedient->id,
-        'action' => MilestoneAction::RepliedClient->value,
-        'notes' => 'Se respondió la consulta del cliente',
-    ]);
-});
-
-test('can add a milestone without notes', function () {
-    $expedient = Expedient::factory()->create();
-
-    $this->actingAs($this->admin);
-
-    Livewire::test('pages::expedientes.show', ['expedient' => $expedient])
-        ->set('milestoneAction', MilestoneAction::Opened->value)
-        ->call('addMilestone')
-        ->assertHasNoErrors();
-
-    $this->assertDatabaseHas('case_milestones', [
-        'case_id' => $expedient->id,
-        'action' => MilestoneAction::Opened->value,
-    ]);
-});
-
-test('cannot add milestone without permission', function () {
+test('cannot validate phone without expediente update permission', function () {
     $expedient = Expedient::factory()->create();
     $user = User::factory()->create();
     $user->givePermissionTo('expedientes.ver');
@@ -210,20 +176,17 @@ test('cannot add milestone without permission', function () {
     $this->actingAs($user);
 
     Livewire::test('pages::expedientes.show', ['expedient' => $expedient])
-        ->set('milestoneAction', MilestoneAction::Opened->value)
-        ->call('addMilestone')
+        ->call('validatePhone')
         ->assertForbidden();
 });
 
-test('milestone action is required', function () {
+test('detail page does not render arbitrary lifecycle state controls', function () {
     $expedient = Expedient::factory()->create();
 
     $this->actingAs($this->admin);
 
     Livewire::test('pages::expedientes.show', ['expedient' => $expedient])
-        ->set('milestoneAction', '')
-        ->call('addMilestone')
-        ->assertHasErrors(['milestoneAction' => 'required']);
+        ->assertDontSee('Cambiar estado');
 });
 
 // Index link tests
@@ -239,92 +202,45 @@ test('index page has ver button linking to detail', function () {
 
 // ─── Phase 3: Status Control (S11-S16 via inline control) ───
 
-test('user without expedientes.actualizar cannot see status control', function () {
+test('user without expedientes.actualizar cannot see lifecycle actions', function () {
     $expedient = Expedient::factory()->create();
     $user = User::factory()->create();
     $user->givePermissionTo('expedientes.ver');
 
     $this->actingAs($user)
         ->get(route('expedientes.show', $expedient))
-        ->assertDontSee('Cambiar estado');
+        ->assertDontSee('Acciones del ciclo de vida');
 });
 
-test('user with expedientes.actualizar can see status control', function () {
+test('user with expedientes.actualizar can see lifecycle actions', function () {
     $expedient = Expedient::factory()->create();
 
     $this->actingAs($this->admin);
 
     Livewire::test('pages::expedientes.show', ['expedient' => $expedient])
-        ->assertSee('Cambiar estado');
+        ->assertSee('Acciones del ciclo de vida');
 });
 
-test('status control shows Conclude option for non-concluded expedient', function () {
+test('pending client expedient exposes phone validation', function () {
     $expedient = Expedient::factory()->create(['status' => CaseStatus::PendingClient]);
 
     $this->actingAs($this->admin);
 
     Livewire::test('pages::expedientes.show', ['expedient' => $expedient])
-        ->assertSee('Concluido');
+        ->assertSee('Confirmar validación telefónica');
 });
 
-test('status control shows Reopen options for concluded expedient', function () {
+test('concluded expedient does not expose lifecycle transitions', function () {
     $expedient = Expedient::factory()->concluded()->create();
 
     $this->actingAs($this->admin);
 
     Livewire::test('pages::expedientes.show', ['expedient' => $expedient])
-        ->assertSee('Pendiente del cliente')
-        ->assertSee('Pendiente del proveedor');
+        ->assertDontSee('Confirmar validación telefónica')
+        ->assertDontSee('Registrar confirmación del proveedor');
 });
 
-test('can conclude an expedient via status control (S12)', function () {
-    $expedient = Expedient::factory()->create(['status' => CaseStatus::PendingClient]);
-
-    $this->actingAs($this->admin);
-
-    Livewire::test('pages::expedientes.show', ['expedient' => $expedient])
-        ->set('statusTarget', CaseStatus::Concluded->value)
-        ->call('changeStatus')
-        ->assertHasNoErrors();
-
-    $expedient->refresh();
-    expect($expedient->status)->toBe(CaseStatus::Concluded)
-        ->and($expedient->closed_at)->not->toBeNull()
-        ->and($expedient->milestones()->action(MilestoneAction::Closed)->count())->toBe(1);
-});
-
-test('can reopen a concluded expedient to PendingClient (S14)', function () {
-    $expedient = Expedient::factory()->concluded()->create();
-
-    $this->actingAs($this->admin);
-
-    Livewire::test('pages::expedientes.show', ['expedient' => $expedient])
-        ->set('statusTarget', CaseStatus::PendingClient->value)
-        ->call('changeStatus')
-        ->assertHasNoErrors();
-
-    $expedient->refresh();
-    expect($expedient->status)->toBe(CaseStatus::PendingClient)
-        ->and($expedient->closed_at)->toBeNull()
-        ->and($expedient->milestones()->action(MilestoneAction::Reopened)->count())->toBe(1);
-});
-
-test('can reopen a concluded expedient to PendingProvider (S15)', function () {
-    $expedient = Expedient::factory()->concluded()->create();
-
-    $this->actingAs($this->admin);
-
-    Livewire::test('pages::expedientes.show', ['expedient' => $expedient])
-        ->set('statusTarget', CaseStatus::PendingProvider->value)
-        ->call('changeStatus')
-        ->assertHasNoErrors();
-
-    $expedient->refresh();
-    expect($expedient->status)->toBe(CaseStatus::PendingProvider)
-        ->and($expedient->closed_at)->toBeNull();
-});
-
-test('cannot change status without permission', function () {
+test('cannot confirm provider without permission', function () {
     $expedient = Expedient::factory()->create();
     $user = User::factory()->create();
     $user->givePermissionTo('expedientes.ver');
@@ -332,8 +248,7 @@ test('cannot change status without permission', function () {
     $this->actingAs($user);
 
     Livewire::test('pages::expedientes.show', ['expedient' => $expedient])
-        ->set('statusTarget', CaseStatus::Concluded->value)
-        ->call('changeStatus')
+        ->call('confirmProvider')
         ->assertForbidden();
 });
 

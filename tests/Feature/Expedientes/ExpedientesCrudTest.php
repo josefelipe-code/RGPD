@@ -42,8 +42,7 @@ test('user with crear permission can open create form', function () {
     Livewire::test('pages::expedientes.index')
         ->call('create')
         ->assertSet('editingExpedientId', null)
-        ->assertSet('caseNumber', '')
-        ->assertSet('status', CaseStatus::PendingClient->value);
+        ->assertSet('caseNumber', '');
 });
 
 test('can create a new expedient', function () {
@@ -58,7 +57,6 @@ test('can create a new expedient', function () {
         ->set('senderPhone', '+5491112345678')
         ->set('mailAccountId', $this->mailAccount->id)
         ->set('assignedUserId', $assignee->id)
-        ->set('status', CaseStatus::PendingClient->value)
         ->set('requestType', 'consulta')
         ->call('save')
         ->assertHasNoErrors();
@@ -83,7 +81,6 @@ test('case number must be unique', function () {
         ->set('senderEmail', 'test@example.com')
         ->set('mailAccountId', $this->mailAccount->id)
         ->set('assignedUserId', $assignee->id)
-        ->set('status', CaseStatus::PendingClient->value)
         ->call('save')
         ->assertHasErrors(['caseNumber' => 'unique']);
 });
@@ -98,7 +95,6 @@ test('case number is required', function () {
         ->set('caseNumber', '')
         ->set('mailAccountId', $this->mailAccount->id)
         ->set('assignedUserId', $assignee->id)
-        ->set('status', CaseStatus::PendingClient->value)
         ->call('save')
         ->assertHasErrors(['caseNumber' => 'required']);
 });
@@ -130,8 +126,7 @@ test('can edit an existing expedient', function () {
         ->call('edit', $expedient->id)
         ->assertSet('editingExpedientId', $expedient->id)
         ->assertSet('caseNumber', 'EXP-EDIT')
-        ->assertSet('senderEmail', 'original@example.com')
-        ->assertSet('status', $expedient->status->value);
+        ->assertSet('senderEmail', 'original@example.com');
 });
 
 test('can update an expedient', function () {
@@ -150,7 +145,6 @@ test('can update an expedient', function () {
         ->set('senderEmail', 'updated@example.com')
         ->set('mailAccountId', $this->mailAccount->id)
         ->set('assignedUserId', $newAssignee->id)
-        ->set('status', CaseStatus::PendingProvider->value)
         ->set('requestType', 'reclamo')
         ->call('save')
         ->assertHasNoErrors();
@@ -159,7 +153,7 @@ test('can update an expedient', function () {
     expect($expedient->case_number)->toBe('EXP-UPDATED')
         ->and($expedient->sender_email)->toBe('updated@example.com')
         ->and($expedient->request_type)->toBe('reclamo')
-        ->and($expedient->status->value)->toBe(CaseStatus::PendingProvider->value);
+        ->and($expedient->status->value)->toBe(CaseStatus::PendingClient->value);
 });
 
 test('can cancel form and reset state', function () {
@@ -183,7 +177,6 @@ test('created expedient appears in the list', function () {
         ->set('caseNumber', 'EXP-LISTED')
         ->set('mailAccountId', $this->mailAccount->id)
         ->set('assignedUserId', $assignee->id)
-        ->set('status', CaseStatus::PendingClient->value)
         ->call('save')
         ->assertSee('EXP-LISTED');
 });
@@ -201,7 +194,6 @@ test('creating expedient stamps opened_at and creates Opened milestone (S11)', f
         ->set('senderEmail', 'lifecycle@example.com')
         ->set('mailAccountId', $this->mailAccount->id)
         ->set('assignedUserId', $assignee->id)
-        ->set('status', CaseStatus::PendingClient->value)
         ->call('save')
         ->assertHasNoErrors();
 
@@ -209,51 +201,6 @@ test('creating expedient stamps opened_at and creates Opened milestone (S11)', f
 
     expect($expedient->opened_at)->not->toBeNull()
         ->and($expedient->milestones()->action(MilestoneAction::Opened)->count())->toBe(1);
-});
-
-test('creating expedient with any status stamps opened_at (S16)', function () {
-    $assignee = User::factory()->create();
-
-    $this->actingAs($this->admin);
-
-    Livewire::test('pages::expedientes.index')
-        ->call('create')
-        ->set('caseNumber', 'EXP-CONCLUDED-CREATE')
-        ->set('mailAccountId', $this->mailAccount->id)
-        ->set('assignedUserId', $assignee->id)
-        ->set('status', CaseStatus::Concluded->value)
-        ->call('save')
-        ->assertHasNoErrors();
-
-    $expedient = Expedient::where('case_number', 'EXP-CONCLUDED-CREATE')->first();
-
-    expect($expedient->opened_at)->not->toBeNull()
-        ->and($expedient->status)->toBe(CaseStatus::Concluded);
-});
-
-test('editing expedient with status change calls transitionTo (S12)', function () {
-    $expedient = Expedient::factory()->create([
-        'case_number' => 'EXP-TRANSITION',
-        'status' => CaseStatus::PendingClient,
-        'mail_account_id' => $this->mailAccount->id,
-    ]);
-
-    $this->actingAs($this->admin);
-
-    Livewire::test('pages::expedientes.index')
-        ->call('edit', $expedient->id)
-        ->set('caseNumber', 'EXP-TRANSITION')
-        ->set('mailAccountId', $this->mailAccount->id)
-        ->set('assignedUserId', $expedient->assigned_user_id)
-        ->set('status', CaseStatus::Concluded->value)
-        ->call('save')
-        ->assertHasNoErrors();
-
-    $expedient->refresh();
-
-    expect($expedient->status)->toBe(CaseStatus::Concluded)
-        ->and($expedient->closed_at)->not->toBeNull()
-        ->and($expedient->milestones()->action(MilestoneAction::Closed)->count())->toBe(1);
 });
 
 test('editing expedient without status change does not create milestone (S13)', function () {
@@ -270,7 +217,6 @@ test('editing expedient without status change does not create milestone (S13)', 
         ->set('caseNumber', 'EXP-NOTRANSITION-UPDATED')
         ->set('mailAccountId', $this->mailAccount->id)
         ->set('assignedUserId', $expedient->assigned_user_id)
-        ->set('status', CaseStatus::PendingClient->value)
         ->call('save')
         ->assertHasNoErrors();
 

@@ -25,11 +25,13 @@ new #[Title('Firmas')] class extends Component {
 
     protected ?User $currentUser = null;
 
+    /** Livewire inicializa la cuenta y el formulario de firmas. */
     public function mount(): void
     {
         abort_unless(Auth::user()->can('firmas.ver'), 403);
     }
 
+    /** Devuelve el usuario autenticado que limita las firmas accesibles. */
     protected function getUser(): User
     {
         return $this->currentUser ??= Auth::user();
@@ -38,6 +40,7 @@ new #[Title('Firmas')] class extends Component {
     /**
      * @return array<string, array<int, mixed>>
      */
+    /** Define la validación de la firma y su cuenta de correo. */
     protected function rules(): array
     {
         return [
@@ -50,22 +53,26 @@ new #[Title('Firmas')] class extends Component {
         ];
     }
 
+    /** Livewire reinicia la paginación al cambiar la búsqueda. */
     public function updatedSearch(): void
     {
         $this->resetPage();
     }
 
+    /** Livewire reinicia la paginación al cambiar el tamaño de página. */
     public function updatedPerPage(): void
     {
         $this->resetPage();
     }
 
+    /** Livewire limpia el error de cuenta cuando cambia la selección. */
     public function updatedSelectedMailAccountId(): void
     {
         $this->resetErrorBag('selectedMailAccountId');
     }
 
     #[Computed]
+    /** Computed que filtra y pagina firmas pertenecientes al usuario. */
     public function signatures()
     {
         $mailAccountIds = $this->getUser()->mailAccounts()->pluck('id');
@@ -81,24 +88,27 @@ new #[Title('Firmas')] class extends Component {
     }
 
     #[Computed]
+    /** Computed que lista las cuentas del usuario para asociar firmas. */
     public function userMailAccounts()
     {
         return $this->getUser()->mailAccounts()->orderBy('label')->get();
     }
 
     #[Computed]
+    /** Computed que sanitiza el HTML de vista previa de una firma. */
     public function renderedBody(): string
     {
         if (blank($this->body)) {
             return '';
         }
 
-        // Allow common signature HTML tags, strip potentially dangerous ones
+        // Conserva etiquetas HTML habituales y elimina las potencialmente peligrosas.
         $allowedTags = '<p><br><strong><em><u><a><span><div><h1><h2><h3><h4><h5><h6><ul><ol><li><img><table><thead><tbody><tr><td><th><hr><blockquote><code><pre><b><i><s><sub><sup>';
 
         return strip_tags($this->body, $allowedTags);
     }
 
+    /** Acción `wire:click` que abre el alta de una firma. */
     public function create(): void
     {
         $this->authorizeAbility('firmas.crear');
@@ -109,6 +119,7 @@ new #[Title('Firmas')] class extends Component {
             : null;
     }
 
+    /** Acción `wire:click` que carga una firma para edición. */
     public function edit(int $id): void
     {
         $this->authorizeAbility('firmas.actualizar');
@@ -124,6 +135,7 @@ new #[Title('Firmas')] class extends Component {
         $this->resetErrorBag();
     }
 
+    /** Acción `wire:submit` que valida y guarda la firma. */
     public function save(): void
     {
         $isCreating = $this->editingSignatureId === null;
@@ -148,7 +160,7 @@ new #[Title('Firmas')] class extends Component {
         } else {
             $signature = $this->getUserSignature($this->editingSignatureId);
 
-            // If mail account changed, handle default consistency on the new account
+            // Si cambia la cuenta, mantiene la consistencia de la firma predeterminada.
             if ($signature->mail_account_id !== $mailAccountId) {
                 $this->handleDefaultConsistency($mailAccountId, $validated['isDefault']);
             } elseif ($validated['isDefault'] && ! $signature->is_default) {
@@ -172,6 +184,7 @@ new #[Title('Firmas')] class extends Component {
             : __('Firma actualizada.'));
     }
 
+    /** Acción `wire:click` que activa o desactiva una firma. */
     public function toggle(int $id): void
     {
         $signature = $this->getUserSignature($id);
@@ -183,13 +196,14 @@ new #[Title('Firmas')] class extends Component {
             : __('Firma desactivada.'));
     }
 
+    /** Acción `wire:click` que cambia la firma predeterminada de una cuenta. */
     public function toggleDefault(int $id): void
     {
         $this->authorizeAbility('firmas.actualizar');
 
         $signature = $this->getUserSignature($id);
 
-        // If setting as default, unset others on same mail account
+        // Al establecerla como predeterminada, desactiva las demás de la cuenta.
         if (! $signature->is_default) {
             $this->handleDefaultConsistency($signature->mail_account_id, true);
             $signature->update(['is_default' => true]);
@@ -200,6 +214,7 @@ new #[Title('Firmas')] class extends Component {
             : __('Firma quitada como predeterminada.'));
     }
 
+    /** Acción `wire:click` que elimina una firma autorizada. */
     public function delete(int $id): void
     {
         $this->authorizeAbility('firmas.eliminar');
@@ -214,12 +229,14 @@ new #[Title('Firmas')] class extends Component {
         Flux::toast(variant: 'success', text: __('Firma eliminada.'));
     }
 
+    /** Acción `wire:click` que cancela y limpia la edición. */
     public function cancel(): void
     {
         $this->resetForm();
         Flux::modal('signature-form')->close();
     }
 
+    /** Resuelve una firma perteneciente al usuario autenticado. */
     private function getUserSignature(int $id): Signature
     {
         $mailAccountIds = $this->getUser()->mailAccounts()->pluck('id');
@@ -228,7 +245,7 @@ new #[Title('Firmas')] class extends Component {
     }
 
     /**
-     * Ensure only one default signature per mail account.
+     * Garantiza una única firma predeterminada por cuenta de correo.
      */
     private function handleDefaultConsistency(int $mailAccountId, bool $setAsDefault): void
     {
@@ -239,11 +256,13 @@ new #[Title('Firmas')] class extends Component {
         }
     }
 
+    /** Comprueba el permiso requerido por la operación de firmas. */
     private function authorizeAbility(string $ability): void
     {
         abort_unless(Auth::user()->can($ability), 403);
     }
 
+    /** Restablece el formulario y su estado de vista previa. */
     private function resetForm(): void
     {
         $this->reset([
@@ -258,6 +277,7 @@ new #[Title('Firmas')] class extends Component {
         $this->resetErrorBag();
     }
 
+    /** Acción `wire:click` que alterna la vista previa de la firma. */
     public function togglePreview(): void
     {
         $this->showPreview = ! $this->showPreview;

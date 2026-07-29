@@ -27,6 +27,7 @@ new #[Title('Contactos')] class extends Component {
      */
     public array $selectedCategories = [];
 
+    /** Livewire inicializa filtros y categorías al montar la página. */
     public function mount(): void
     {
         abort_unless(Auth::user()->can('contactos.ver'), 403);
@@ -35,6 +36,7 @@ new #[Title('Contactos')] class extends Component {
     /**
      * @return array<string, array<int, mixed>>
      */
+    /** Define la validación del formulario de contactos. */
     protected function rules(): array
     {
         return [
@@ -48,17 +50,20 @@ new #[Title('Contactos')] class extends Component {
         ];
     }
 
+    /** Livewire reinicia la paginación al cambiar la búsqueda. */
     public function updatedSearch(): void
     {
         $this->resetPage();
     }
 
+    /** Livewire reinicia la paginación al cambiar el tamaño de página. */
     public function updatedPerPage(): void
     {
         $this->resetPage();
     }
 
     #[Computed]
+    /** Computed que filtra y pagina los contactos mostrados. */
     public function contacts()
     {
         return Contact::query()
@@ -73,17 +78,20 @@ new #[Title('Contactos')] class extends Component {
     }
 
     #[Computed]
+    /** Computed que lista categorías disponibles para el formulario. */
     public function availableCategories()
     {
         return Category::query()->orderBy('name')->get();
     }
 
+    /** Acción `wire:click` que abre el formulario de alta. */
     public function create(): void
     {
         $this->authorizeAbility('contactos.crear');
         $this->resetForm();
     }
 
+    /** Acción `wire:click` que carga un contacto existente para edición. */
     public function edit(int $contactId): void
     {
         $this->authorizeAbility('contactos.actualizar');
@@ -101,6 +109,7 @@ new #[Title('Contactos')] class extends Component {
         $this->resetErrorBag();
     }
 
+    /** Acción `wire:submit` que valida y guarda el contacto. */
     public function save(): void
     {
         $isCreating = $this->editingContactId === null;
@@ -138,6 +147,7 @@ new #[Title('Contactos')] class extends Component {
             : __('Contacto actualizado.'));
     }
 
+    /** Acción `wire:click` que elimina el contacto autorizado. */
     public function delete(int $contactId): void
     {
         $this->authorizeAbility('contactos.eliminar');
@@ -151,17 +161,20 @@ new #[Title('Contactos')] class extends Component {
         Flux::toast(variant: 'success', text: __('Contacto eliminado.'));
     }
 
+    /** Acción `wire:click` que cancela la edición y limpia el formulario. */
     public function cancel(): void
     {
         $this->resetForm();
         Flux::modal('contact-form')->close();
     }
 
+    /** Comprueba el permiso requerido por las acciones CRUD de contactos. */
     private function authorizeAbility(string $ability): void
     {
         abort_unless(Auth::user()->can($ability), 403);
     }
 
+    /** Restablece los campos y el identificador del formulario. */
     private function resetForm(): void
     {
         $this->reset([

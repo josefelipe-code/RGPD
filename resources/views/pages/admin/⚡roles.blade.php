@@ -26,6 +26,7 @@ new #[Title('Roles')] class extends Component {
      */
     public array $selectedPermissions = [];
 
+    /** Livewire inicializa filtros y el formulario de roles. */
     public function mount(): void
     {
         abort_unless(Auth::user()->can('roles.ver'), 403);
@@ -34,6 +35,7 @@ new #[Title('Roles')] class extends Component {
     /**
      * @return array<string, array<int, mixed>>
      */
+    /** Define la validación del formulario de roles. */
     protected function rules(): array
     {
         return [
@@ -48,17 +50,20 @@ new #[Title('Roles')] class extends Component {
         ];
     }
 
+    /** Livewire reinicia la paginación al cambiar la búsqueda. */
     public function updatedSearch(): void
     {
         $this->resetPage();
     }
 
+    /** Livewire reinicia la paginación al cambiar el tamaño de página. */
     public function updatedPerPage(): void
     {
         $this->resetPage();
     }
 
     #[Computed]
+    /** Computed que filtra y pagina roles administrables. */
     public function roles()
     {
         return Role::query()
@@ -69,6 +74,7 @@ new #[Title('Roles')] class extends Component {
     }
 
     #[Computed]
+    /** Computed que lista permisos asignables al rol. */
     public function permissions(): Collection
     {
         return Permission::query()
@@ -76,12 +82,14 @@ new #[Title('Roles')] class extends Component {
             ->get();
     }
 
+    /** Acción `wire:click` que abre el alta de un rol. */
     public function create(): void
     {
         $this->authorizeAbility('roles.crear');
         $this->resetForm();
     }
 
+    /** Acción `wire:click` que carga un rol para edición. */
     public function edit(int $roleId): void
     {
         $this->authorizeAbility('roles.actualizar');
@@ -95,6 +103,7 @@ new #[Title('Roles')] class extends Component {
         $this->resetErrorBag();
     }
 
+    /** Acción `wire:submit` que valida y guarda el rol y sus permisos. */
     public function save(): void
     {
         $isCreating = $this->editingRoleId === null;
@@ -124,6 +133,7 @@ new #[Title('Roles')] class extends Component {
             : __('Rol actualizado.'));
     }
 
+    /** Acción `wire:click` que elimina un rol autorizado. */
     public function delete(int $roleId): void
     {
         $this->authorizeAbility('roles.eliminar');
@@ -147,17 +157,20 @@ new #[Title('Roles')] class extends Component {
         Flux::toast(variant: 'success', text: __('Rol eliminado.'));
     }
 
+    /** Acción `wire:click` que cancela y limpia la edición. */
     public function cancel(): void
     {
         $this->resetForm();
         Flux::modal('role-form')->close();
     }
 
+    /** Comprueba el permiso requerido por las operaciones de roles. */
     private function authorizeAbility(string $ability): void
     {
         abort_unless(Auth::user()->can($ability), 403);
     }
 
+    /** Restablece el formulario y el rol en edición. */
     private function resetForm(): void
     {
         $this->reset([

@@ -7,7 +7,7 @@ use App\Models\MailMessage;
 use Illuminate\Support\Collection;
 
 /**
- * Compute suggestion candidates for an inbound mail message.
+ * Calcula candidatos de expediente para un mensaje entrante.
  *
  * Returns a collection of arrays with keys: expedient, confidence, reason.
  * Suggestions are NEVER auto-linked — the user must confirm.
@@ -25,6 +25,7 @@ class InboundSuggestionService
      *
      * @return Collection<int, array{expedient: Expedient, confidence: string, reason: string}>
      */
+    /** Busca expedientes candidatos para el mensaje mostrado en la bandeja. */
     public function suggest(MailMessage $message): Collection
     {
         // Priority 1: In-Reply-To match against outgoing messages (S19).
@@ -50,7 +51,7 @@ class InboundSuggestionService
             return collect();
         }
 
-        // Step 2: If message also has a phone, find additional matches by phone.
+        // Si el mensaje también tiene teléfono, busca coincidencias adicionales.
         // These are valid because the email anchor corroborates the set.
         $results = $emailMatches;
 
@@ -67,6 +68,7 @@ class InboundSuggestionService
      *
      * Returns the highest-confidence suggestion if a match is found, or null.
      */
+    /** Prioriza un expediente cuyo mensaje tiene el mismo In-Reply-To. */
     protected function matchInReplyTo(MailMessage $message): ?array
     {
         if (blank($message->in_reply_to)) {
@@ -105,6 +107,7 @@ class InboundSuggestionService
      *
      * @return Collection<int, array{expedient: Expedient, confidence: string, reason: string}>
      */
+    /** Busca expedientes relacionados por el correo del remitente. */
     protected function queryByEmail(MailMessage $message, string $email): Collection
     {
         $expedientes = Expedient::query()
@@ -132,6 +135,7 @@ class InboundSuggestionService
      * @param  array<int>  $excludeIds
      * @return Collection<int, array{expedient: Expedient, confidence: string, reason: string}>
      */
+    /** Busca expedientes relacionados por teléfono excluyendo resultados previos. */
     protected function queryByPhone(MailMessage $message, string $phone, array $excludeIds): Collection
     {
         $expedientes = Expedient::query()

@@ -1,708 +1,489 @@
 <?php
 
-use App\Enums\MailMessageStatus;
-use App\Models\Expedient;
+use App\Mail\ImapOutboundMail;
+use App\Models\Contact;
 use App\Models\MailAccount;
 use App\Models\MailMessage;
+use App\Models\Signature;
+use App\Models\Template;
 use App\Models\User;
 use App\Services\Bandeja\ImapMailboxService;
-use App\Services\Bandeja\ImapSyncService;
+use App\Services\Bandeja\InboxOutboundMailService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Pagination\LengthAwarePaginator;
-use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Exceptions;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Livewire\Livewire;
 
 uses(RefreshDatabase::class)->in(__DIR__);
 
 beforeEach(function () {
     $this->seed(RolesAndPermissionsSeeder::class);
-
     $this->user = User::factory()->create();
     $this->user->assignRole('Super Administrador');
+
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('listFolders')->byDefault()->andReturn(collect([
+        ['path' => 'INBOX', 'name' => 'INBOX'],
+        ['path' => 'Archive', 'name' => 'Archive'],
+        ['path' => 'Trash', 'name' => 'Trash'],
+    ]));
+    $mailbox->shouldReceive('listEnvelopes')->byDefault()->andReturn(collect());
+    $this->instance(ImapMailboxService::class, $mailbox);
 });
 
-// -- Access / Permission tests
+function inboxEnvelope(int $uid, string $subject, bool $isRead = false, string $folder = 'INBOX'): array
+{
+    return [
+        'uid' => $uid,
+        'message_id' => "<{$uid}@imap.example>",
+        'subject' => $subject,
+        'from_email' => "sender{$uid}@example.com",
+        'from_name' => "Sender {$uid}",
+        'received_at' => now()->subMinutes($uid),
+        'is_read' => $isRead,
+        'folder' => $folder,
+    ];
+}
 
-it('requires authentication to access inbox', function () {
+it('requires authentication to access the inbox', function () {
     $this->get(route('bandeja.inbox'))
         ->assertRedirect(route('login'));
 });
 
-it('forbids access without bandeja.ver permission', function () {
+it('requires the inbox view permission', function () {
     $user = User::factory()->create();
-    // No role assigned — no bandeja.ver permission
 
     $this->actingAs($user)
         ->get(route('bandeja.inbox'))
         ->assertForbidden();
 });
 
-it('allows access with bandeja.ver permission', function () {
-    $this->actingAs($this->user)
-        ->get(route('bandeja.inbox'))
-        ->assertOk();
-});
-
-// -- Render tests
-
-it('shows active accounts for selection', function () {
+it('loads transient IMAP envelopes without querying or persisting MailMessage', function () {
     $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    MailAccount::factory()->for($this->user)->create(['is_active' => false]);
-
-    $this->actingAs($this->user)
-        ->get(route('bandeja.inbox'))
-        ->assertSee($account->label);
-});
-
-it('loads IMAP folders and retrieves an envelope body on demand', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $message = MailMessage::factory()->for($account)->create([
-        'folder' => 'INBOX',
-        'imap_uid' => '42',
-        'body_html' => null,
-        'body_text' => null,
-    ]);
-
     $mailbox = Mockery::mock(ImapMailboxService::class);
-    $mailbox->shouldReceive('listFolders')->once()->with(Mockery::type(MailAccount::class))->andReturn(collect([
+    $mailbox->shouldReceive('listFolders')->once()->andReturn(collect([
         ['path' => 'INBOX', 'name' => 'INBOX'],
-        ['path' => 'Sent', 'name' => 'Sent'],
     ]));
-    $mailbox->shouldReceive('fetchMessage')->once()->with(Mockery::type(MailAccount::class), 'INBOX', 42)->andReturn([
-        'html' => '<p>Loaded from IMAP</p>',
-        'text' => 'Loaded from IMAP',
-        'headers' => [],
-        'is_read' => false,
-    ]);
-    $mailbox->shouldReceive('setRead')->once()->with(Mockery::type(MailAccount::class), 'INBOX', 42)->andReturnTrue();
-
+    $mailbox->shouldReceive('listEnvelopes')->once()
+        ->with(Mockery::on(fn (MailAccount $selected): bool => $selected->is($account)), 'INBOX')
+        ->andReturn(collect([inboxEnvelope(77, 'IMAP only envelope')]));
     $this->instance(ImapMailboxService::class, $mailbox);
 
     $component = Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id)
-        ->call('loadFolders')
-        ->set('selectedFolder', 'Sent')
-        ->assertSet('selectedFolder', 'Sent')
-        ->set('selectedFolder', 'INBOX')
-        ->call('selectMessage', $message->id);
+        ->test('pages::bandeja.inbox');
 
-    expect($component->get('selectedMessageBody')->toHtml())->toContain('Loaded from IMAP')
-        ->and($message->fresh()->is_read)->toBeTrue();
+    expect($component->get('messages')->first()->subject)->toBe('IMAP only envelope')
+        ->and(MailMessage::query()->where('mail_account_id', $account->id)->count())->toBe(0);
 });
 
-it('does not mark a message read when IMAP rejects the remote flag update', function () {
+it('filters envelopes by IMAP read state only', function () {
     $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $message = MailMessage::factory()->for($account)->create([
-        'folder' => 'INBOX',
-        'imap_uid' => '42',
-        'is_read' => false,
-        'body_html' => null,
-        'body_text' => null,
-    ]);
-
     $mailbox = Mockery::mock(ImapMailboxService::class);
-    $mailbox->shouldReceive('fetchMessage')->once()->andReturn([
-        'html' => '<p>Loaded from IMAP</p>',
-        'text' => 'Loaded from IMAP',
-        'headers' => [],
-        'is_read' => false,
-    ]);
-    $mailbox->shouldReceive('setRead')->once()->andReturnFalse();
-
+    $mailbox->shouldReceive('listFolders')->andReturn(collect([
+        ['path' => 'INBOX', 'name' => 'INBOX'],
+    ]));
+    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([
+        inboxEnvelope(1, 'Unread', false),
+        inboxEnvelope(2, 'Read', true),
+    ]));
     $this->instance(ImapMailboxService::class, $mailbox);
 
     $component = Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id)
-        ->call('selectMessage', $message->id);
-
-    expect($component->get('selectedMessageBody')->toHtml())->toContain('Loaded from IMAP')
-        ->and($message->fresh()->is_read)->toBeFalse();
-});
-
-it('does not mark a message read when the remote flag update throws', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $message = MailMessage::factory()->for($account)->create([
-        'folder' => 'INBOX',
-        'imap_uid' => '42',
-        'is_read' => false,
-        'body_html' => null,
-        'body_text' => null,
-    ]);
-
-    $mailbox = Mockery::mock(ImapMailboxService::class);
-    $mailbox->shouldReceive('fetchMessage')->once()->andReturn([
-        'html' => '<p>Loaded from IMAP</p>',
-        'text' => 'Loaded from IMAP',
-        'headers' => [],
-        'is_read' => false,
-    ]);
-    $mailbox->shouldReceive('setRead')->once()->andThrow(new RuntimeException('IMAP unavailable'));
-
-    $this->instance(ImapMailboxService::class, $mailbox);
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id)
-        ->call('selectMessage', $message->id);
-
-    expect($message->fresh()->is_read)->toBeFalse();
-});
-
-it('keeps the reader usable when fetching an IMAP message fails', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $message = MailMessage::factory()->for($account)->create([
-        'folder' => 'INBOX',
-        'imap_uid' => '42',
-        'body_html' => null,
-        'body_text' => null,
-    ]);
-
-    $mailbox = Mockery::mock(ImapMailboxService::class);
-    $mailbox->shouldReceive('fetchMessage')->once()->andThrow(new RuntimeException('IMAP unavailable'));
-
-    $this->instance(ImapMailboxService::class, $mailbox);
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id)
-        ->call('selectMessage', $message->id)
-        ->assertSet('selectedMessageId', $message->id)
-        ->assertSet('loadedBodyHtml', null)
-        ->assertSet('loadedBodyText', null);
-});
-
-it('shows messages for selected account', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $message = MailMessage::factory()->for($account)->create([
-        'subject' => 'Test Subject',
-        'from_email' => 'test@example.com',
-        'from_name' => 'Test User',
-    ]);
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->assertSee('Test Subject')
-        ->assertSee('Test User');
-});
-
-it('shows empty state when no account selected', function () {
-    // Create user with no mail accounts
-    $this->actingAs($this->user)
-        ->get(route('bandeja.inbox'))
-        ->assertSee('Seleccioná una cuenta');
-});
-
-// -- Sync tests (mocked)
-
-it('syncs messages from IMAP account', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-
-    $syncedMessage = MailMessage::factory()->make([
-        'mail_account_id' => $account->id,
-        'subject' => 'Synced Message',
-    ]);
-
-    $mock = Mockery::mock(ImapSyncService::class);
-    $mock->shouldReceive('syncAccount')
-        ->with($account)
-        ->andReturn(Collection::make([$syncedMessage]));
-
-    $this->instance(ImapSyncService::class, $mock);
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id)
-        ->call('sync')
-        ->assertSet('selectedAccountId', $account->id);
-});
-
-it('shows error toast when sync fails', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-
-    $mock = Mockery::mock(ImapSyncService::class);
-    $mock->shouldReceive('syncAccount')
-        ->with($account)
-        ->andThrow(new RuntimeException('Error de conexión IMAP'));
-
-    $this->instance(ImapSyncService::class, $mock);
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id)
-        ->call('sync');
-});
-
-// -- Discard / Status change tests
-
-it('discards a message and changes status', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $message = MailMessage::factory()->for($account)->create(['status' => MailMessageStatus::New]);
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id)
-        ->call('discard', $message->id);
-
-    expect($message->fresh()->status)->toBe(MailMessageStatus::Discarded);
-});
-
-it('suggests new case by setting pending_review status', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $message = MailMessage::factory()->for($account)->create(['status' => MailMessageStatus::New]);
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id)
-        ->call('suggestNewCase', $message->id);
-
-    expect($message->fresh()->status)->toBe(MailMessageStatus::PendingReview);
-});
-
-it('filters messages by status', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    MailMessage::factory()->for($account)->count(3)->create(['status' => MailMessageStatus::New]);
-    MailMessage::factory()->for($account)->count(2)->create(['status' => MailMessageStatus::Discarded]);
-
-    $component = Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id);
-
-    // All messages visible by default
-    expect($component->get('messages')->count())->toBe(5);
-
-    // Filter by new
-    $component->call('setStatusFilter', 'new');
-    expect($component->get('messages')->count())->toBe(3);
-
-    // Filter by discarded
-    $component->call('setStatusFilter', 'discarded');
-    expect($component->get('messages')->count())->toBe(2);
-});
-
-it('selects a message and shows it in reading pane', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $message = MailMessage::factory()->for($account)->create([
-        'subject' => 'Important Message',
-        'body_html' => '<p>Hello world</p>',
-    ]);
-
-    $component = Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id)
-        ->call('selectMessage', $message->id);
-
-    expect($component->get('selectedMessageId'))->toBe($message->id);
-    expect($component->get('selectedMessage')->subject)->toBe('Important Message');
-});
-
-it('shows status counts for the selected account', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    MailMessage::factory()->for($account)->count(3)->create(['status' => MailMessageStatus::New]);
-    MailMessage::factory()->for($account)->count(1)->create(['status' => MailMessageStatus::PendingReview]);
-
-    $component = Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id);
-
-    $counts = $component->get('statusCounts');
-    expect($counts['new'])->toBe(3);
-    expect($counts['pending_review'])->toBe(1);
-});
-
-// -- Authorization / Multi-tenant isolation tests
-
-it('cannot read messages from another users account', function () {
-    $otherUser = User::factory()->create();
-    $otherUser->assignRole('Super Administrador');
-    $otherAccount = MailAccount::factory()->for($otherUser)->create(['is_active' => true]);
-    $otherMessage = MailMessage::factory()->for($otherAccount)->create(['subject' => 'Secret Message']);
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $otherAccount->id)
-        ->call('selectMessage', $otherMessage->id)
-        ->assertSet('selectedMessage', null);
-});
-
-it('cannot discard a message from another users account', function () {
-    $otherUser = User::factory()->create();
-    $otherUser->assignRole('Super Administrador');
-    $otherAccount = MailAccount::factory()->for($otherUser)->create(['is_active' => true]);
-    $otherMessage = MailMessage::factory()->for($otherAccount)->create(['status' => MailMessageStatus::New]);
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $otherAccount->id)
-        ->call('discard', $otherMessage->id);
-
-    expect($otherMessage->fresh()->status)->toBe(MailMessageStatus::New);
-});
-
-it('cannot suggest new case for a message from another users account', function () {
-    $otherUser = User::factory()->create();
-    $otherUser->assignRole('Super Administrador');
-    $otherAccount = MailAccount::factory()->for($otherUser)->create(['is_active' => true]);
-    $otherMessage = MailMessage::factory()->for($otherAccount)->create(['status' => MailMessageStatus::New]);
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $otherAccount->id)
-        ->call('suggestNewCase', $otherMessage->id);
-
-    expect($otherMessage->fresh()->status)->toBe(MailMessageStatus::New);
-});
-
-it('cannot view status counts from another users account', function () {
-    $otherUser = User::factory()->create();
-    $otherUser->assignRole('Super Administrador');
-    $otherAccount = MailAccount::factory()->for($otherUser)->create(['is_active' => true]);
-    MailMessage::factory()->for($otherAccount)->count(5)->create(['status' => MailMessageStatus::New]);
-
-    $component = Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $otherAccount->id);
-
-    expect($component->get('statusCounts'))->toBe([]);
-});
-
-it('cannot select message without a valid selected account', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $message = MailMessage::factory()->for($account)->create();
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', null)
-        ->call('selectMessage', $message->id)
-        ->assertStatus(403);
-});
-
-it('cannot discard message without a valid selected account', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $message = MailMessage::factory()->for($account)->create(['status' => MailMessageStatus::New]);
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', null)
-        ->call('discard', $message->id)
-        ->assertStatus(403);
-});
-
-it('cannot use an inactive account for actions', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => false]);
-    $message = MailMessage::factory()->for($account)->create(['status' => MailMessageStatus::New]);
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id)
-        ->call('discard', $message->id)
-        ->assertStatus(403);
-
-    expect($message->fresh()->status)->toBe(MailMessageStatus::New);
-});
-
-it('moves a selected message only after remote success and preserves its case', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $expedient = Expedient::factory()->for($account)->create();
-    $message = MailMessage::factory()->for($account)->create([
-        'folder' => 'INBOX',
-        'imap_uid' => '42',
-        'case_id' => $expedient->id,
-    ]);
-    $mailbox = Mockery::mock(ImapMailboxService::class);
-    $mailbox->shouldReceive('moveMessage')->once()->andReturn(['folder' => 'Archive', 'uid' => 9]);
-    $this->instance(ImapMailboxService::class, $mailbox);
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id)
-        ->set('remoteFolders', [['path' => 'Archive', 'name' => 'Archive']])
-        ->call('moveMessage', $message->id, 'Archive');
-
-    expect($message->fresh()->folder)->toBe('Archive')
-        ->and($message->fresh()->imap_uid)->toBe('9')
-        ->and($message->fresh()->case_id)->toBe($expedient->id);
-});
-
-it('forbids moving a message without remote-mail permission', function () {
-    $user = User::factory()->create();
-    $user->givePermissionTo('bandeja.ver');
-    $account = MailAccount::factory()->for($user)->create(['is_active' => true]);
-    $message = MailMessage::factory()->for($account)->create(['folder' => 'INBOX', 'imap_uid' => '42']);
-
-    Livewire::actingAs($user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id)
-        ->call('moveMessage', $message->id, 'Archive')
-        ->assertForbidden();
-});
-
-it('does not update a local message when remote delete fails', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $message = MailMessage::factory()->for($account)->create(['folder' => 'INBOX', 'imap_uid' => '42']);
-    $mailbox = Mockery::mock(ImapMailboxService::class);
-    $mailbox->shouldReceive('deleteMessage')->once()->andThrow(new RuntimeException('No Trash'));
-    $this->instance(ImapMailboxService::class, $mailbox);
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id)
-        ->call('deleteMessage', $message->id);
-
-    expect($message->fresh()->folder)->toBe('INBOX')
-        ->and($message->fresh()->imap_uid)->toBe('42');
-});
-
-// -- Search / Pagination tests
-
-it('filters messages by search query on sender name', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    MailMessage::factory()->for($account)->create(['from_name' => 'Juan Perez', 'subject' => 'Test']);
-    MailMessage::factory()->for($account)->create(['from_name' => 'Maria Lopez', 'subject' => 'Other']);
-
-    $component = Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id);
+        ->test('pages::bandeja.inbox');
 
     expect($component->get('messages')->total())->toBe(2);
 
-    $component->set('search', 'Juan');
-    expect($component->get('messages')->total())->toBe(1);
-    expect($component->get('messages')->first()->from_name)->toBe('Juan Perez');
+    $component->call('setStatusFilter', 'unread');
+
+    expect($component->get('messages')->total())->toBe(1)
+        ->and($component->get('messages')->first()->subject)->toBe('Unread');
 });
 
-it('does not return a search match from another mail account', function () {
-    $selectedAccount = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $otherAccount = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-
-    MailMessage::factory()->for($selectedAccount)->create([
-        'subject' => 'Unrelated message',
-        'from_name' => 'Selected account sender',
+it('keeps an unread selected reader and actions after deferred IMAP marking', function () {
+    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $localMessage = MailMessage::factory()->for($account)->create([
+        'imap_uid' => '42',
+        'folder' => 'INBOX',
+        'is_read' => false,
+        'body_text' => null,
+        'body_html' => null,
     ]);
-    MailMessage::factory()->for($otherAccount)->create([
-        'subject' => 'Confidential search match',
-        'from_name' => 'Other account sender',
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('listFolders')->andReturn(collect([
+        ['path' => 'INBOX', 'name' => 'INBOX'],
+    ]));
+    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([inboxEnvelope(42, 'Remote body')]));
+    $mailbox->shouldReceive('fetchMessage')->once()->with(Mockery::on(fn (MailAccount $selected): bool => $selected->is($account)), 'INBOX', 42)->andReturn([
+        'html' => '<p>Loaded from IMAP</p>',
+        'text' => 'Loaded from IMAP',
+        'headers' => [],
+        'is_read' => false,
     ]);
+    $mailbox->shouldReceive('setRead')->once()->with(Mockery::on(fn (MailAccount $selected): bool => $selected->is($account)), 'INBOX', 42)->andReturnTrue();
+    $this->instance(ImapMailboxService::class, $mailbox);
 
     $component = Livewire::actingAs($this->user)
         ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $selectedAccount->id)
-        ->set('search', 'Confidential');
+        ->call('setStatusFilter', 'unread')
+        ->call('selectMessage', 42);
 
-    expect($component->get('messages')->total())->toBe(0)
-        ->and($component->get('messages')->getCollection())->toBeEmpty();
+    expect($component->get('selectedMessage')->subject)->toBe('Remote body')
+        ->and($component->get('bodyLoaded'))->toBeFalse()
+        ->and($component->get('envelopes')[0]['is_read'])->toBeFalse()
+        ->and($component->html())->toContain('wire:init="loadSelectedMessageBody')
+        ->and($component->html())->toContain('class="flex-1 min-h-0"');
+
+    $component->call('loadSelectedMessageBody', $account->id, 'INBOX', 42);
+
+    expect($component->get('selectedMessageBody')->toHtml())->toContain('Loaded from IMAP')
+        ->and($component->get('bodyLoaded'))->toBeTrue()
+        ->and($component->get('envelopes')[0]['is_read'])->toBeFalse();
+
+    $component->call('markMessageRead', $account->id, 'INBOX', 42);
+
+    expect($component->get('envelopes')[0]['is_read'])->toBeTrue()
+        ->and($component->get('messages')->total())->toBe(0)
+        ->and($component->get('selectedMessage')->subject)->toBe('Remote body')
+        ->and($component->html())->toContain('Responder')
+        ->and($component->html())->toContain('Reenviar')
+        ->and($localMessage->fresh()->is_read)->toBeFalse()
+        ->and($localMessage->fresh()->body_text)->toBeNull();
 });
 
-it('filters messages by search query on subject', function () {
+it('handles deferred body failures and rejects a body fetch outside the selected account', function () {
     $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    MailMessage::factory()->for($account)->create(['subject' => 'Urgent matter']);
-    MailMessage::factory()->for($account)->create(['subject' => 'Regular update']);
+    $otherAccount = MailAccount::factory()->create(['is_active' => true]);
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('listFolders')->andReturn(collect([['path' => 'INBOX', 'name' => 'INBOX']]));
+    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([inboxEnvelope(42, 'Remote body')]));
+    $mailbox->shouldReceive('fetchMessage')->once()->with(Mockery::on(fn (MailAccount $selected): bool => $selected->is($account)), 'INBOX', 42)->andThrow(new RuntimeException('IMAP unavailable'));
+    $this->instance(ImapMailboxService::class, $mailbox);
 
     $component = Livewire::actingAs($this->user)
         ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id);
-
-    $component->set('search', 'Urgent');
-    expect($component->get('messages')->total())->toBe(1);
+        ->call('selectMessage', 42)
+        ->call('loadSelectedMessageBody', $otherAccount->id, 'INBOX', 42)
+        ->assertSet('bodyLoaded', false)
+        ->assertSet('bodyLoadFailed', false)
+        ->call('loadSelectedMessageBody', $account->id, 'INBOX', 42)
+        ->assertSet('bodyLoaded', false)
+        ->assertSet('bodyLoadFailed', true);
 });
 
-it('filters messages by search query on body text', function () {
+it('uses account, folder, and UID for move and trash operations', function () {
     $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    MailMessage::factory()->for($account)->create(['body_text' => 'Please review the attached document']);
-    MailMessage::factory()->for($account)->create(['body_text' => 'Just a quick hello']);
+    $localMessage = MailMessage::factory()->for($account)->create([
+        'imap_uid' => '42',
+        'folder' => 'INBOX',
+    ]);
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('listFolders')->andReturn(collect([
+        ['path' => 'INBOX', 'name' => 'INBOX'],
+        ['path' => 'Archive', 'name' => 'Archive'],
+        ['path' => 'Trash', 'name' => 'Trash'],
+    ]));
+    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([inboxEnvelope(42, 'Remote operation')]));
+    $mailbox->shouldReceive('moveMessage')->once()->with(Mockery::on(fn (MailAccount $selected): bool => $selected->is($account)), 'INBOX', 42, 'Archive')->andReturn([
+        'folder' => 'Archive',
+        'uid' => 9,
+    ]);
+    $mailbox->shouldReceive('deleteMessage')->once()->with(Mockery::on(fn (MailAccount $selected): bool => $selected->is($account)), 'INBOX', 42)->andReturn([
+        'folder' => 'Trash',
+        'uid' => 10,
+    ]);
+    $this->instance(ImapMailboxService::class, $mailbox);
 
     $component = Livewire::actingAs($this->user)
         ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id);
+        ->set('remoteFolders', [
+            ['path' => 'INBOX', 'name' => 'INBOX'],
+            ['path' => 'Archive', 'name' => 'Archive'],
+            ['path' => 'Trash', 'name' => 'Trash'],
+        ])
+        ->call('moveMessage', 42, 'Archive');
 
-    $component->set('search', 'document');
-    expect($component->get('messages')->total())->toBe(1);
+    expect($component->get('envelopes'))->toBeEmpty()
+        ->and($localMessage->fresh()->folder)->toBe('INBOX');
+
+    $deleteComponent = Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->set('envelopes', [array_merge(inboxEnvelope(42, 'Remote operation'), ['account_id' => $account->id, 'received_at' => now()->toIso8601String()])])
+        ->call('deleteMessage', 42);
+
+    expect($deleteComponent->get('envelopes'))->toBeEmpty()
+        ->and($localMessage->fresh()->folder)->toBe('INBOX');
 });
 
-it('respects perPage setting', function () {
+it('renders one sync control beside a responsive folder selector', function () {
     $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    MailMessage::factory()->for($account)->count(20)->create();
+
+    $html = Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->html();
+
+    expect(substr_count($html, 'wire:click="sync"'))->toBe(1)
+        ->and(substr_count($html, 'wire:click="loadFolders"'))->toBe(0)
+        ->and($html)->toContain('min-w-0')
+        ->and($html)->toContain('sm:grid-cols-[minmax(0,1fr)_minmax(0,auto)_5.5rem]');
+});
+
+it('bounds the inbox panes and keeps their overflow surfaces independent', function () {
+    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('listFolders')->andReturn(collect([['path' => 'INBOX', 'name' => 'INBOX']]));
+    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([inboxEnvelope(42, 'Scrollable message')]));
+    $this->instance(ImapMailboxService::class, $mailbox);
+
+    $html = Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->call('selectMessage', 42)
+        ->html();
+
+    expect($html)->toContain('h-[calc(100dvh-10.5rem)]')
+        ->and($html)->toContain('grid-rows-2')
+        ->and($html)->toContain('lg:grid-rows-1')
+        ->and(substr_count($html, 'overflow-y-auto'))->toBeGreaterThanOrEqual(2)
+        ->and($html)->toContain('shrink-0');
+});
+
+it('does not render or expose legacy expediente and discard actions', function () {
+    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
 
     $component = Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id);
+        ->test('pages::bandeja.inbox');
 
-    // Default perPage is 15
-    expect($component->get('messages')->perPage())->toBe(15);
-    expect($component->get('messages')->count())->toBe(15);
+    $html = $component->html();
 
-    $component->set('perPage', 10);
-    expect($component->get('messages')->perPage())->toBe(10);
-    expect($component->get('messages')->count())->toBe(10);
+    expect($html)->not->toContain('associateMessage')
+        ->and($html)->not->toContain('createExpedientFromMessage')
+        ->and($html)->not->toContain('suggestNewCase')
+        ->and($html)->not->toContain('wire:click="discard');
 });
 
-it('returns paginator from messages', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    MailMessage::factory()->for($account)->count(3)->create();
-
-    $component = Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id);
-
-    expect($component->get('messages'))->toBeInstanceOf(LengthAwarePaginator::class);
-});
-
-it('navigating to a different account shows that accounts messages', function () {
-    $account1 = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $account2 = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    MailMessage::factory()->for($account1)->create(['subject' => 'Only In Account One']);
-    MailMessage::factory()->for($account2)->create(['subject' => 'Only In Account Two']);
-
-    // Navigate to account1 — shows account1 message
-    $response1 = $this->actingAs($this->user)
-        ->get(route('bandeja.inbox', ['account' => $account1->id]));
-    $response1->assertSee('Only In Account One');
-
-    // Navigate to account2 — shows account2 message
-    $response2 = $this->actingAs($this->user)
-        ->get(route('bandeja.inbox', ['account' => $account2->id]));
-    $response2->assertSee('Only In Account Two');
-
-    // Verify account1 message is NOT in account2's response
-    // Use a regex that matches the exact message text in the message list context
-    $response2->assertDontSee('Only In Account One');
-});
-
-it('shows no results message when search has no matches', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    MailMessage::factory()->for($account)->create(['subject' => 'Hello']);
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id)
-        ->set('search', 'nonexistent-xyz')
-        ->assertSee('No se encontraron resultados');
-});
-
-// -- Navigation context / query string tests
-
-it('selects account from query string parameter', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true, 'label' => 'Test Account']);
-    MailMessage::factory()->for($account)->create(['subject' => 'Account Specific']);
-
-    $this->actingAs($this->user)
-        ->get(route('bandeja.inbox', ['account' => $account->id]))
-        ->assertSee('Account Specific')
-        ->assertSee('Test Account');
-});
-
-it('falls back to first active account when query string account is invalid', function () {
-    $validAccount = MailAccount::factory()->for($this->user)->create(['is_active' => true, 'label' => 'Valid Account']);
-    MailMessage::factory()->for($validAccount)->create(['subject' => 'Valid Message']);
-
-    // Non-existent account ID
-    $this->actingAs($this->user)
-        ->get(route('bandeja.inbox', ['account' => 99999]))
-        ->assertSee('Valid Message');
-});
-
-it('falls back to first active account when query string account is inactive', function () {
-    $inactiveAccount = MailAccount::factory()->for($this->user)->create(['is_active' => false, 'label' => 'Inactive']);
-    $activeAccount = MailAccount::factory()->for($this->user)->create(['is_active' => true, 'label' => 'Active']);
-    MailMessage::factory()->for($activeAccount)->create(['subject' => 'Active Message']);
-
-    $this->actingAs($this->user)
-        ->get(route('bandeja.inbox', ['account' => $inactiveAccount->id]))
-        ->assertSee('Active Message')
-        ->assertDontSee('Inactive');
-});
-
-it('falls back safely when query string account belongs to another user', function () {
+it('does not load an account belonging to another user', function () {
     $otherUser = User::factory()->create();
     $otherUser->assignRole('Super Administrador');
     $otherAccount = MailAccount::factory()->for($otherUser)->create(['is_active' => true]);
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldNotReceive('listFolders');
+    $mailbox->shouldNotReceive('listEnvelopes');
+    $this->instance(ImapMailboxService::class, $mailbox);
 
-    $myAccount = MailAccount::factory()->for($this->user)->create(['is_active' => true, 'label' => 'My Account']);
-    MailMessage::factory()->for($myAccount)->create(['subject' => 'My Message']);
-
-    $this->actingAs($this->user)
-        ->get(route('bandeja.inbox', ['account' => $otherAccount->id]))
-        ->assertSee('My Message')
-        ->assertDontSee($otherAccount->label);
+    Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->set('selectedAccountId', $otherAccount->id)
+        ->assertSet('remoteFolders', []);
 });
 
-it('auto-selects first active account when no query string provided', function () {
-    $firstAccount = MailAccount::factory()->for($this->user)->create(['is_active' => true, 'label' => 'First']);
-    $secondAccount = MailAccount::factory()->for($this->user)->create(['is_active' => true, 'label' => 'Second']);
-    MailMessage::factory()->for($firstAccount)->create(['subject' => 'First Message']);
-
-    $this->actingAs($this->user)
-        ->get(route('bandeja.inbox'))
-        ->assertSee('First Message');
-});
-
-// -- Filtered selection coherence tests
-
-it('clears selected message when status filter excludes it', function () {
+it('sends a reply from the selected account without persisting the IMAP body', function () {
+    Mail::fake();
     $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $newMessage = MailMessage::factory()->for($account)->create([
-        'subject' => 'New Message',
-        'status' => MailMessageStatus::New,
+    $signature = Signature::factory()->for($account)->default()->create(['body' => '<p>Saludos desde la firma</p>']);
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('listFolders')->andReturn(collect([
+        ['path' => 'INBOX', 'name' => 'INBOX'],
+    ]));
+    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([
+        array_merge(inboxEnvelope(42, 'Consulta'), [
+            'message_id' => '<origin@example.com>',
+            'references' => '<root@example.com>',
+        ]),
+    ]));
+    $this->instance(ImapMailboxService::class, $mailbox);
+
+    Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->call('openComposer', 'reply', 42)
+        ->assertSet('composerOpen', true)
+        ->assertSet('composerSignatureId', $signature->id)
+        ->set('composerBody', 'Respuesta desde la bandeja')
+        ->call('sendComposer');
+
+    Mail::assertSent(ImapOutboundMail::class, function (ImapOutboundMail $mail) use ($account): bool {
+        return $mail->account->is($account)
+            && $mail->recipientEmail === 'sender42@example.com'
+            && $mail->inReplyTo === '<origin@example.com>'
+            && $mail->signature === '<p>Saludos desde la firma</p>';
+    });
+
+    $record = MailMessage::query()->where('mail_account_id', $account->id)->sole();
+    expect($record->body_html)->toBeNull()
+        ->and($record->body_text)->toBeNull()
+        ->and($record->in_reply_to)->toBe('<origin@example.com>')
+        ->and($record->message_id)->toMatch('/^[^<>]+@[^<>]+$/');
+});
+
+it('reports outbound failures with safe composer context', function () {
+    Exceptions::fake();
+    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('listFolders')->andReturn(collect([['path' => 'INBOX', 'name' => 'INBOX']]));
+    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([inboxEnvelope(42, 'Consulta')]));
+    $this->instance(ImapMailboxService::class, $mailbox);
+
+    $exception = new RuntimeException('SMTP delivery failed');
+    $outbound = Mockery::mock(InboxOutboundMailService::class);
+    $outbound->shouldReceive('send')->once()->andThrow($exception);
+    $this->instance(InboxOutboundMailService::class, $outbound);
+
+    Log::shouldReceive('withContext')->once()->with([
+        'mail_account_id' => $account->id,
+        'mode' => 'reply',
+        'recipient_domain' => 'example.com',
+        'recipient_count' => 4,
     ]);
-    MailMessage::factory()->for($account)->create([
-        'subject' => 'Discarded Message',
-        'status' => MailMessageStatus::Discarded,
+
+    Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->call('openComposer', 'reply', 42)
+        ->set('composerCc', 'copy.one@example.com, copy.two@example.com')
+        ->set('composerBcc', 'copy.three@example.com')
+        ->set('composerBody', 'Sensitive outgoing body')
+        ->call('sendComposer');
+
+    Exceptions::assertReported(fn (RuntimeException $reported): bool => $reported === $exception);
+});
+
+it('opens the bound composer with reply and forward defaults', function () {
+    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('listFolders')->andReturn(collect([['path' => 'INBOX', 'name' => 'INBOX']]));
+    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([inboxEnvelope(42, 'Consulta')]));
+    $this->instance(ImapMailboxService::class, $mailbox);
+
+    $component = Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox');
+
+    $html = $component->html();
+
+    expect($html)->toContain('data-flux-modal')
+        ->and($html)->toContain('wire:model.self="composerOpen"')
+        ->and($html)->toContain('w-[min(96vw,72rem)]')
+        ->and($html)->toContain('style="resize: both; "')
+        ->and($html)->toContain('min-h-48');
+
+    $component
+        ->call('openComposer', 'reply', 42)
+        ->assertSet('composerOpen', true)
+        ->assertSet('composerMode', 'reply')
+        ->assertSet('composerTo', 'sender42@example.com')
+        ->assertSet('composerSubject', 'Re: Consulta');
+
+    $component->call('openComposer', 'forward', 42)
+        ->assertSet('composerOpen', true)
+        ->assertSet('composerMode', 'forward')
+        ->assertSet('composerTo', '')
+        ->assertSet('composerSubject', 'Fwd: Consulta')
+        ->call('closeComposer')
+        ->assertSet('composerOpen', false)
+        ->assertSet('composerMode', null);
+});
+
+it('keeps edited text until the user explicitly applies a selected template', function () {
+    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $template = Template::factory()->create([
+        'name' => 'Seguimiento',
+        'subject' => 'Seguimiento de consulta',
+        'body' => 'Cuerpo de plantilla',
     ]);
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('listFolders')->andReturn(collect([['path' => 'INBOX', 'name' => 'INBOX']]));
+    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([inboxEnvelope(42, 'Consulta')]));
+    $this->instance(ImapMailboxService::class, $mailbox);
+
+    Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->call('openComposer', 'reply', 42)
+        ->set('composerBody', 'Texto editado')
+        ->set('composerTemplateId', $template->id)
+        ->assertSet('composerBody', 'Texto editado')
+        ->call('applyComposerTemplate')
+        ->assertSet('composerBody', 'Cuerpo de plantilla')
+        ->assertSet('composerSubject', 'Re: Consulta');
+});
+
+it('uses a selected contact or a valid manual recipient for forwards', function () {
+    Mail::fake();
+    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $contact = Contact::factory()->create(['name' => 'Ana Perez', 'email' => 'ana@example.com']);
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('listFolders')->andReturn(collect([['path' => 'INBOX', 'name' => 'INBOX']]));
+    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([inboxEnvelope(42, 'Consulta')]));
+    $this->instance(ImapMailboxService::class, $mailbox);
 
     $component = Livewire::actingAs($this->user)
         ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id)
-        ->call('selectMessage', $newMessage->id);
+        ->call('openComposer', 'forward', 42)
+        ->set('composerContactSearch', 'Ana');
 
-    // Message is visible and selected
-    expect($component->get('selectedMessage')->id)->toBe($newMessage->id);
+    expect($component->get('composerContacts')->pluck('id')->all())->toContain($contact->id);
 
-    // Filter to discarded — the selected 'new' message should no longer be visible
-    $component->call('setStatusFilter', 'discarded');
+    $component
+        ->call('selectComposerContact', $contact->id)
+        ->assertSet('composerTo', 'ana@example.com')
+        ->set('composerBody', 'Reenvío para contacto')
+        ->call('sendComposer');
 
-    expect($component->get('selectedMessage'))->toBeNull();
+    Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->call('openComposer', 'forward', 42)
+        ->set('composerTo', 'manual@example.com')
+        ->set('composerBody', 'Reenvío manual')
+        ->call('sendComposer');
+
+    Mail::assertSent(ImapOutboundMail::class, fn (ImapOutboundMail $mail): bool => $mail->recipientEmail === 'ana@example.com');
+    Mail::assertSent(ImapOutboundMail::class, fn (ImapOutboundMail $mail): bool => $mail->recipientEmail === 'manual@example.com');
 });
 
-it('clears selected message when search excludes it', function () {
+it('sends and persists comma-separated CC and BCC recipients', function () {
+    Mail::fake();
     $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $message = MailMessage::factory()->for($account)->create([
-        'subject' => 'Important Report',
-        'from_name' => 'Juan Perez',
-    ]);
-    MailMessage::factory()->for($account)->create([
-        'subject' => 'Other Thing',
-        'from_name' => 'Maria Lopez',
-    ]);
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('listFolders')->andReturn(collect([['path' => 'INBOX', 'name' => 'INBOX']]));
+    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([inboxEnvelope(42, 'Consulta')]));
+    $this->instance(ImapMailboxService::class, $mailbox);
 
-    $component = Livewire::actingAs($this->user)
+    Livewire::actingAs($this->user)
         ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id)
-        ->call('selectMessage', $message->id);
+        ->call('openComposer', 'reply', 42)
+        ->set('composerCc', 'cc.one@example.com, cc.two@example.com')
+        ->set('composerBcc', 'bcc@example.com')
+        ->set('composerBody', 'Respuesta con copias')
+        ->call('sendComposer');
 
-    expect($component->get('selectedMessage')->id)->toBe($message->id);
+    Mail::assertSent(ImapOutboundMail::class, function (ImapOutboundMail $mail): bool {
+        return $mail->ccRecipients === ['cc.one@example.com', 'cc.two@example.com']
+            && $mail->bccRecipients === ['bcc@example.com'];
+    });
 
-    // Search that excludes the selected message
-    $component->set('search', 'Maria');
-
-    expect($component->get('selectedMessage'))->toBeNull();
+    $record = MailMessage::query()->where('mail_account_id', $account->id)->sole();
+    expect($record->cc)->toBe(['cc.one@example.com', 'cc.two@example.com'])
+        ->and($record->bcc)->toBe(['bcc@example.com']);
 });
 
-it('keeps selected message when it matches active filters', function () {
+it('validates the mailbox composer before sending', function () {
     $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $message = MailMessage::factory()->for($account)->create([
-        'subject' => 'Important Report',
-        'status' => MailMessageStatus::New,
-    ]);
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('listFolders')->andReturn(collect([
+        ['path' => 'INBOX', 'name' => 'INBOX'],
+    ]));
+    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([inboxEnvelope(42, 'Consulta')]));
+    $this->instance(ImapMailboxService::class, $mailbox);
 
-    $component = Livewire::actingAs($this->user)
+    Livewire::actingAs($this->user)
         ->test('pages::bandeja.inbox')
-        ->set('selectedAccountId', $account->id)
-        ->call('selectMessage', $message->id);
-
-    // Filter to 'new' — selected message should still be visible
-    $component->call('setStatusFilter', 'new');
-
-    expect($component->get('selectedMessage')->id)->toBe($message->id);
+        ->call('openComposer', 'forward', 42)
+        ->set('composerTo', '')
+        ->set('composerCc', 'not-an-email')
+        ->set('composerBcc', 'also-not-an-email')
+        ->set('composerBody', '')
+        ->call('sendComposer')
+        ->assertHasErrors([
+            'composerTo',
+            'composerCc',
+            'composerBcc',
+            'composerBody',
+        ]);
 });

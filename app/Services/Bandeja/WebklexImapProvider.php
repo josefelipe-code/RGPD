@@ -11,6 +11,7 @@ use Webklex\PHPIMAP\Message;
 
 class WebklexImapProvider implements ImapProvider
 {
+    /** Lista las carpetas remotas que solicita la bandeja Livewire. */
     public function listFolders(MailAccount $account): Collection
     {
         return $this->withClient($account, function ($client): Collection {
@@ -22,24 +23,31 @@ class WebklexImapProvider implements ImapProvider
         });
     }
 
+    /** Lee sobres sin cuerpo para mostrar una carpeta de forma eficiente. */
     public function listEnvelopes(MailAccount $account, string $folder): Collection
     {
-        return $this->withClient($account, function ($client) use ($folder): Collection {
-            $imapFolder = $client->getFolderByPath($folder, false, true);
+        try {
+            return $this->withClient($account, function ($client) use ($folder): Collection {
+                $imapFolder = $client->getFolderByPath($folder, false, true);
 
-            if ($imapFolder === null) {
-                return collect();
-            }
+                if ($imapFolder === null) {
+                    return collect();
+                }
 
-            return collect($imapFolder->messages()
-                ->setFetchBody(false)
-                ->setFetchFlags(true)
-                ->get())
-                ->map(fn (Message $message): array => $this->envelope($message, $folder))
-                ->values();
-        });
+                return collect($imapFolder->query()
+                    ->whereAll()
+                    ->setFetchBody(false)
+                    ->setFetchFlags(true)
+                    ->get())
+                    ->map(fn (Message $message): array => $this->envelope($message, $folder))
+                    ->values();
+            });
+        } catch (\Exception $e) {
+            throw new \RuntimeException(__('No se pudo sincronizar la carpeta IMAP.'), 0, $e);
+        }
     }
 
+    /** Obtiene cuerpo, cabeceras y estado del mensaje leído por la bandeja. */
     public function fetchMessage(MailAccount $account, string $folder, int $uid): array
     {
         return $this->withClient($account, function ($client) use ($folder, $uid): array {
@@ -70,6 +78,7 @@ class WebklexImapProvider implements ImapProvider
         });
     }
 
+    /** Cambia la marca Seen del mensaje solicitada por la bandeja. */
     public function setRead(MailAccount $account, string $folder, int $uid, bool $read): bool
     {
         return $this->withClient($account, function ($client) use ($folder, $uid, $read): bool {
@@ -90,6 +99,7 @@ class WebklexImapProvider implements ImapProvider
         });
     }
 
+    /** Mueve un mensaje a la carpeta destino elegida en la bandeja. */
     public function moveMessage(MailAccount $account, string $folder, int $uid, string $targetFolder): array
     {
         return $this->withClient($account, function ($client) use ($folder, $uid, $targetFolder): array {
@@ -107,6 +117,7 @@ class WebklexImapProvider implements ImapProvider
         });
     }
 
+    /** Mueve el mensaje a la carpeta Trash detectada para la cuenta. */
     public function deleteMessage(MailAccount $account, string $folder, int $uid): array
     {
         return $this->withClient($account, function ($client) use ($folder, $uid): array {
@@ -133,6 +144,7 @@ class WebklexImapProvider implements ImapProvider
     /**
      * @return array<string, mixed>
      */
+    /** Convierte un mensaje Webklex en el sobre que consumen los servicios IMAP. */
     protected function envelope(Message $message, string $folder): array
     {
         $from = $message->getFrom()?->first();
@@ -155,6 +167,7 @@ class WebklexImapProvider implements ImapProvider
     /**
      * @return array<string, mixed>
      */
+    /** Extrae cabeceras de threading con valores compatibles con la aplicación. */
     protected function headers(Message $message): array
     {
         $headers = $message->getHeaders();
@@ -166,6 +179,7 @@ class WebklexImapProvider implements ImapProvider
         ];
     }
 
+    /** Convierte atributos Webklex o escalares en texto nullable. */
     protected function stringValue(mixed $value): ?string
     {
         if ($value instanceof Attribute) {
@@ -175,6 +189,7 @@ class WebklexImapProvider implements ImapProvider
         return filled($value) ? (string) $value : null;
     }
 
+    /** Convierte una fecha Webklex a Carbon sin inventar valores faltantes. */
     protected function dateValue(mixed $value): ?CarbonInterface
     {
         if ($value instanceof Attribute) {
@@ -184,6 +199,7 @@ class WebklexImapProvider implements ImapProvider
         return $value instanceof CarbonInterface ? $value : null;
     }
 
+    /** Abre un cliente IMAP, ejecuta la operación y garantiza su desconexión. */
     protected function withClient(MailAccount $account, callable $callback): mixed
     {
         $config = $account->imapConfig();
@@ -208,6 +224,7 @@ class WebklexImapProvider implements ImapProvider
         }
     }
 
+    /** Resuelve un mensaje por carpeta y UID para moverlo o eliminarlo. */
     protected function findMessage(mixed $client, string $folder, int $uid): Message
     {
         $imapFolder = $client->getFolderByPath($folder, false, true);
@@ -225,6 +242,7 @@ class WebklexImapProvider implements ImapProvider
         return $message;
     }
 
+    /** Encuentra la ruta de papelera compatible con distintos nombres de servidor. */
     protected function findTrashFolder(mixed $client): ?string
     {
         return collect($client->getFolders(false))
@@ -232,6 +250,7 @@ class WebklexImapProvider implements ImapProvider
             ?->path;
     }
 
+    /** Determina si una carpeta remota representa la papelera. */
     protected function isTrashFolder(string $path, string $name): bool
     {
         $value = mb_strtolower($path.' '.$name);

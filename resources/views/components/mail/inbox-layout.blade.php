@@ -12,14 +12,14 @@
     - reader      → Reading pane (message detail or empty state)
 --}}
 
-<div {{ $attributes->merge(['class' => 'flex min-h-0 flex-col gap-4 lg:h-[calc(100vh-10.5rem)]']) }}>
+<div {{ $attributes->merge(['class' => 'flex h-[calc(100dvh-10.5rem)] min-h-0 flex-col gap-4']) }}>
     {{-- Header area --}}
     @isset($header)
         {{ $header }}
     @endisset
 
     {{-- Two-pane mail layout: stacked on mobile, side-by-side on desktop --}}
-    <div class="grid min-h-0 flex-1 grid-cols-1 overflow-hidden rounded-xl border border-zinc-700/50 bg-zinc-950/60 lg:grid-cols-[420px_minmax(0,1fr)]">
+    <div class="grid min-h-0 flex-1 grid-cols-1 grid-rows-2 overflow-hidden rounded-xl border border-zinc-700/50 bg-zinc-950/60 lg:grid-cols-[420px_minmax(0,1fr)] lg:grid-rows-1">
         {{-- Left column: filters + toolbar + message list --}}
         <div class="flex min-h-0 flex-col overflow-hidden border-b border-zinc-700/50 bg-zinc-900/40 lg:border-r lg:border-b-0">
             {{-- Top controls stack: filters then toolbar --}}
@@ -49,4 +49,6 @@
             @endisset
         </div>
     </div>
+
+    {{ $slot }}
 </div>

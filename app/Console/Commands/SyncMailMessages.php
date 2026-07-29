@@ -12,6 +12,10 @@ class SyncMailMessages extends Command
 
     protected $description = 'Synchronize incoming IMAP messages into mail_messages';
 
+    /**
+     * Sincroniza los mensajes de las cuentas activas, invocado por Artisan
+     * mediante el comando `bandeja:sync` y opcionalmente limitado por cuenta.
+     */
     public function handle(ImapSyncService $syncService): int
     {
         $query = MailAccount::query()->where('is_active', true);

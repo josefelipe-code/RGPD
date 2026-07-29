@@ -60,6 +60,7 @@ class CaseMilestone extends Model
     /**
      * Scope a query to only actions of a specific type.
      */
+    /** Limita hitos a una acción concreta para consultas del expediente. */
     public function scopeAction($query, MilestoneAction $action)
     {
         return $query->where('action', $action);

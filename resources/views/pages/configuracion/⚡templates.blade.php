@@ -20,6 +20,7 @@ new #[Title('Plantillas')] class extends Component {
     public string $body = '';
     public bool $isActive = true;
 
+    /** Livewire inicializa el formulario y filtros de plantillas. */
     public function mount(): void
     {
         abort_unless(Auth::user()->can('plantillas.ver'), 403);
@@ -28,6 +29,7 @@ new #[Title('Plantillas')] class extends Component {
     /**
      * @return array<string, array<int, mixed>>
      */
+    /** Define la validación de plantillas de correo. */
     protected function rules(): array
     {
         return [
@@ -38,17 +40,20 @@ new #[Title('Plantillas')] class extends Component {
         ];
     }
 
+    /** Livewire reinicia la paginación al cambiar la búsqueda. */
     public function updatedSearch(): void
     {
         $this->resetPage();
     }
 
+    /** Livewire reinicia la paginación al cambiar el tamaño de página. */
     public function updatedPerPage(): void
     {
         $this->resetPage();
     }
 
     #[Computed]
+    /** Computed que filtra y pagina las plantillas visibles. */
     public function templates()
     {
         return Template::query()
@@ -60,12 +65,14 @@ new #[Title('Plantillas')] class extends Component {
             ->paginate($this->perPage);
     }
 
+    /** Acción `wire:click` que abre el alta de una plantilla. */
     public function create(): void
     {
         $this->authorizeAbility('plantillas.crear');
         $this->resetForm();
     }
 
+    /** Acción `wire:click` que carga una plantilla para edición. */
     public function edit(int $id): void
     {
         $this->authorizeAbility('plantillas.actualizar');
@@ -81,6 +88,7 @@ new #[Title('Plantillas')] class extends Component {
         $this->resetErrorBag();
     }
 
+    /** Acción `wire:submit` que valida y guarda la plantilla. */
     public function save(): void
     {
         $isCreating = $this->editingTemplateId === null;
@@ -116,6 +124,7 @@ new #[Title('Plantillas')] class extends Component {
             : __('Plantilla actualizada.'));
     }
 
+    /** Acción `wire:click` que activa o desactiva una plantilla. */
     public function toggle(int $id): void
     {
         $template = $this->getTemplate($id);
@@ -127,6 +136,7 @@ new #[Title('Plantillas')] class extends Component {
             : __('Plantilla desactivada.'));
     }
 
+    /** Acción `wire:click` que elimina una plantilla autorizada. */
     public function delete(int $id): void
     {
         $this->authorizeAbility('plantillas.eliminar');
@@ -141,22 +151,26 @@ new #[Title('Plantillas')] class extends Component {
         Flux::toast(variant: 'success', text: __('Plantilla eliminada.'));
     }
 
+    /** Acción `wire:click` que cancela y limpia la edición. */
     public function cancel(): void
     {
         $this->resetForm();
         Flux::modal('template-form')->close();
     }
 
+    /** Resuelve una plantilla existente dentro de las operaciones CRUD. */
     private function getTemplate(int $id): Template
     {
         return Template::findOrFail($id);
     }
 
+    /** Comprueba el permiso requerido por la operación de plantillas. */
     private function authorizeAbility(string $ability): void
     {
         abort_unless(Auth::user()->can($ability), 403);
     }
 
+    /** Restablece el formulario y el identificador de edición. */
     private function resetForm(): void
     {
         $this->reset([

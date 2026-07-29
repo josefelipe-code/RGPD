@@ -88,6 +88,7 @@ class MailAccount extends Model
     /**
      * Scope a query to only active accounts.
      */
+    /** Limita la consulta a cuentas habilitadas para operar. */
     public function scopeActive($query)
     {
         return $query->where('is_active', true);
@@ -98,6 +99,7 @@ class MailAccount extends Model
      *
      * @return array<string, mixed>
      */
+    /** Construye la configuración IMAP consumida por los servicios de bandeja. */
     public function imapConfig(): array
     {
         return array_merge([
@@ -125,6 +127,7 @@ class MailAccount extends Model
      *
      * @return array<string, mixed>
      */
+    /** Construye la configuración SMTP consumida por MailAccountConfigService. */
     public function smtpConfig(): array
     {
         return array_merge([

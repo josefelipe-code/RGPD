@@ -11,8 +11,9 @@ new class extends Component {
     public string $password = '';
 
     /**
-     * Delete the currently authenticated user.
+     * Elimina el usuario autenticado mediante la acción de cierre de sesión.
      */
+    /** Acción `wire:submit` que elimina la cuenta mediante la acción Logout. */
     public function deleteUser(Logout $logout): void
     {
         $this->validate([

@@ -12,19 +12,24 @@ use Illuminate\Support\Facades\Date;
 
 class ImapMailboxService
 {
+    /** Recibe el proveedor IMAP que ejecuta las operaciones remotas. */
     public function __construct(private readonly ImapProvider $provider) {}
 
+    /** Delega al proveedor IMAP las carpetas que muestra la bandeja. */
     public function listFolders(MailAccount $account): Collection
     {
         return $this->provider->listFolders($account);
     }
 
+    /** Delega la lectura de sobres sin descargar cuerpos de mensajes. */
     public function listEnvelopes(MailAccount $account, string $folder): Collection
     {
         return $this->provider->listEnvelopes($account, $folder);
     }
 
     /**
+     * Persiste los sobres de una carpeta para el comando y los consumidores heredados.
+     *
      * @return Collection<int, MailMessage>
      */
     public function syncFolder(MailAccount $account, string $folder = 'INBOX'): Collection
@@ -34,6 +39,8 @@ class ImapMailboxService
     }
 
     /**
+     * Recupera el contenido completo que solicita el lector de la bandeja.
+     *
      * @return array{html: string, text: string, headers: array<string, mixed>, is_read: bool}
      */
     public function fetchMessage(MailAccount $account, string $folder, int $uid): array
@@ -41,12 +48,15 @@ class ImapMailboxService
         return $this->provider->fetchMessage($account, $folder, $uid);
     }
 
+    /** Marca un mensaje como leído o no leído a petición de la bandeja. */
     public function setRead(MailAccount $account, string $folder, int $uid, bool $read = true): bool
     {
         return $this->provider->setRead($account, $folder, $uid, $read);
     }
 
     /**
+     * Mueve un mensaje mediante el proveedor usado por la bandeja Livewire.
+     *
      * @return array{folder: string, uid: int|string|null}
      */
     public function moveMessage(MailAccount $account, string $folder, int $uid, string $targetFolder): array
@@ -55,6 +65,8 @@ class ImapMailboxService
     }
 
     /**
+     * Envía un mensaje a la papelera mediante el proveedor IMAP.
+     *
      * @return array{folder: string, uid: int|string|null}
      */
     public function deleteMessage(MailAccount $account, string $folder, int $uid): array
@@ -63,6 +75,8 @@ class ImapMailboxService
     }
 
     /**
+     * Convierte un sobre remoto en un MailMessage para la sincronización heredada.
+     *
      * @param  array<string, mixed>  $envelope
      */
     protected function persistEnvelope(MailAccount $account, string $folder, array $envelope): MailMessage
@@ -100,6 +114,7 @@ class ImapMailboxService
         return $message->refresh();
     }
 
+    /** Normaliza fechas del proveedor y usa la fecha actual cuando faltan. */
     protected function resolveDate(mixed $date): CarbonInterface
     {
         if ($date instanceof CarbonInterface) {
@@ -110,6 +125,8 @@ class ImapMailboxService
     }
 
     /**
+     * Divide la cabecera References en identificadores utilizables para threading.
+     *
      * @return array<int, string>|null
      */
     protected function references(mixed $references): ?array

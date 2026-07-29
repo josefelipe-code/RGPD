@@ -61,6 +61,7 @@ class User extends Authenticatable
     /**
      * Get the user's initials
      */
+    /** Calcula las iniciales que muestran los menús de usuario. */
     public function initials(): string
     {
         return Str::of($this->name)

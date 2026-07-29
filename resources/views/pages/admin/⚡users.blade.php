@@ -31,6 +31,7 @@ new #[Title('Usuarios')] class extends Component {
      */
     public array $selectedRoles = [];
 
+    /** Livewire inicializa filtros y el formulario de usuarios. */
     public function mount(): void
     {
         abort_unless(Auth::user()->can('usuarios.ver'), 403);
@@ -39,6 +40,7 @@ new #[Title('Usuarios')] class extends Component {
     /**
      * @return array<string, array<int, mixed>>
      */
+    /** Define la validación del formulario de usuarios. */
     protected function rules(): array
     {
         $passwordRules = $this->editingUserId === null
@@ -53,17 +55,20 @@ new #[Title('Usuarios')] class extends Component {
         ];
     }
 
+    /** Livewire reinicia la paginación al cambiar la búsqueda. */
     public function updatedSearch(): void
     {
         $this->resetPage();
     }
 
+    /** Livewire reinicia la paginación al cambiar el tamaño de página. */
     public function updatedPerPage(): void
     {
         $this->resetPage();
     }
 
     #[Computed]
+    /** Computed que filtra y pagina usuarios administrables. */
     public function users()
     {
         return User::query()
@@ -76,6 +81,7 @@ new #[Title('Usuarios')] class extends Component {
     }
 
     #[Computed]
+    /** Computed que lista roles disponibles para asignación. */
     public function availableRoles(): Collection
     {
         return Role::query()
@@ -83,12 +89,14 @@ new #[Title('Usuarios')] class extends Component {
             ->get();
     }
 
+    /** Acción `wire:click` que abre el alta de un usuario. */
     public function create(): void
     {
         $this->authorizeAbility('usuarios.crear');
         $this->resetForm();
     }
 
+    /** Acción `wire:click` que carga un usuario para edición. */
     public function edit(int $userId): void
     {
         $this->authorizeAbility('usuarios.actualizar');
@@ -105,6 +113,7 @@ new #[Title('Usuarios')] class extends Component {
         $this->resetErrorBag();
     }
 
+    /** Acción `wire:submit` que valida y guarda el usuario. */
     public function save(): void
     {
         $isCreating = $this->editingUserId === null;
@@ -144,6 +153,7 @@ new #[Title('Usuarios')] class extends Component {
             : __('Usuario actualizado.'));
     }
 
+    /** Acción `wire:click` que elimina un usuario autorizado. */
     public function delete(int $userId): void
     {
         $this->authorizeAbility('usuarios.eliminar');
@@ -163,17 +173,20 @@ new #[Title('Usuarios')] class extends Component {
         Flux::toast(variant: 'success', text: __('Usuario eliminado.'));
     }
 
+    /** Acción `wire:click` que cancela y limpia la edición. */
     public function cancel(): void
     {
         $this->resetForm();
         Flux::modal('user-form')->close();
     }
 
+    /** Comprueba el permiso requerido por las operaciones de usuarios. */
     private function authorizeAbility(string $ability): void
     {
         abort_unless(Auth::user()->can($ability), 403);
     }
 
+    /** Restablece el formulario y el usuario en edición. */
     private function resetForm(): void
     {
         $this->reset([

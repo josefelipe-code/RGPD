@@ -17,6 +17,9 @@ class CreateNewUser implements CreatesNewUsers
      *
      * @param  array<string, string>  $input
      */
+    /**
+     * Valida y crea el usuario solicitado por Fortify durante el registro.
+     */
     public function create(array $input): User
     {
         Validator::make($input, [

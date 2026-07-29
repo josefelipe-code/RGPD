@@ -23,12 +23,26 @@ new class extends Component {
     public ?int $templateId = null;
     public bool $sending = false;
 
+    /** Livewire inicializa el compositor con el expediente, origen y firma elegidos. */
     public function mount(): void
     {
         abort_unless(Auth::user()->can('expedientes.actualizar'), 403);
 
         $expedient = Expedient::findOrFail($this->expedientId);
-        $origin = MailMessage::findOrFail($this->originMessageId);
+        abort_unless($expedient->mailAccount?->user_id === Auth::id(), 403);
+        abort_unless(in_array($this->mode, ['reply_client', 'forward_provider'], true), 404);
+
+        $origin = MailMessage::query()
+            ->whereKey($this->originMessageId)
+            ->where('case_id', $expedient->id)
+            ->where('mail_account_id', $expedient->mail_account_id)
+            ->firstOrFail();
+
+        if ($this->mode === 'reply_client') {
+            $expedient->assertCanReplyClient();
+        } else {
+            $expedient->assertCanForwardProvider();
+        }
 
         // Pre-fill based on mode
         if ($this->mode === 'reply_client') {
@@ -49,29 +63,38 @@ new class extends Component {
     }
 
     #[Computed]
+    /** Computed que entrega el expediente al formulario y a la vista. */
     public function expedient(): Expedient
     {
         return Expedient::findOrFail($this->expedientId);
     }
 
     #[Computed]
+    /** Computed que entrega el mensaje origen para responder o reenviar. */
     public function origin(): MailMessage
     {
-        return MailMessage::findOrFail($this->originMessageId);
+        return MailMessage::query()
+            ->whereKey($this->originMessageId)
+            ->where('case_id', $this->expedientId)
+            ->where('mail_account_id', $this->expedient->mail_account_id)
+            ->firstOrFail();
     }
 
     #[Computed]
+    /** Computed que resuelve la cuenta desde la que se enviará el correo. */
     public function account(): MailAccount
     {
         return $this->expedient->mailAccount;
     }
 
     #[Computed]
+    /** Computed que lista todas las plantillas activas ordenadas por nombre. */
     public function templates()
     {
         return Template::active()->orderBy('name')->get();
     }
 
+    /** Livewire aplica siempre el cuerpo; solo asigna el asunto de la plantilla si el asunto actual está vacío y la plantilla tiene asunto, sin sustituir prefijos Re:/Fwd:. */
     public function updatedTemplateId(?int $value): void
     {
         if ($value === null) {
@@ -93,6 +116,7 @@ new class extends Component {
     /**
      * @return array<string, array<int, mixed>>
      */
+    /** Define la validación ejecutada por Livewire antes de enviar. */
     protected function rules(): array
     {
         $rules = [
@@ -116,6 +140,7 @@ new class extends Component {
         return $rules;
     }
 
+    /** Acción `wire:submit` que valida, envía y registra el correo del expediente. */
     public function send(MailBridgeService $bridgeService): void
     {
         abort_unless(Auth::user()->can('expedientes.actualizar'), 403);
@@ -126,7 +151,7 @@ new class extends Component {
         $origin = $this->origin;
         $account = $this->account;
 
-        // Parse CC/BCC from comma-separated strings
+        // Separa CC y BCC recibidos como listas delimitadas por comas.
         $cc = filled($this->cc) ? array_map('trim', explode(',', $this->cc)) : [];
         $bcc = filled($this->bcc) ? array_map('trim', explode(',', $this->bcc)) : [];
 

@@ -10,22 +10,27 @@ use Illuminate\Support\Facades\Date;
 use Webklex\PHPIMAP\Attribute;
 
 /**
- * Backward-compatible synchronization entry point for the inbox command/UI.
+ * Punto de entrada de sincronización compatible con el comando y la bandeja.
  */
 class ImapSyncService
 {
+    /** Permite inyectar el servicio usado por el comando y la compatibilidad heredada. */
     public function __construct(private readonly ?ImapMailboxService $mailbox = null) {}
 
     /**
-     * Sync all unseen messages from a mail account's INBOX.
+     * Sincroniza los mensajes de una carpeta de la cuenta de correo.
      *
      * @return Collection<int, MailMessage>
+     */
+    /**
+     * Mantiene la entrada de sincronización usada por el comando y código legado.
      */
     public function syncAccount(MailAccount $account, string $folder = 'INBOX'): Collection
     {
         return ($this->mailbox ?? app(ImapMailboxService::class))->syncFolder($account, $folder);
     }
 
+    /** Normaliza fechas del proveedor Webklex para registros sincronizados. */
     protected function resolveReceivedAt(mixed $date): CarbonInterface
     {
         if ($date instanceof Attribute) {

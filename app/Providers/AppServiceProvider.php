@@ -18,6 +18,7 @@ class AppServiceProvider extends ServiceProvider
     /**
      * Register any application services.
      */
+    /** Registra bindings de aplicación durante el arranque del contenedor. */
     public function register(): void
     {
         $this->app->singleton(MailAccountConfigService::class);
@@ -27,6 +28,7 @@ class AppServiceProvider extends ServiceProvider
     /**
      * Bootstrap any application services.
      */
+    /** Configura valores y autorizaciones globales durante el arranque de Laravel. */
     public function boot(): void
     {
         $this->configureDefaults();
@@ -35,10 +37,12 @@ class AppServiceProvider extends ServiceProvider
     /**
      * Configure default behaviors for production-ready applications.
      */
+    /** Define valores predeterminados de autorización y configuración de la aplicación. */
     protected function configureDefaults(): void
     {
         Date::use(CarbonImmutable::class);
 
+        // La closure concede el bypass global únicamente a administradores.
         Gate::before(function (User $user): ?bool {
             return $user->hasRole('Super Administrador') ? true : null;
         });

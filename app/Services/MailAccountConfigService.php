@@ -12,15 +12,14 @@ use Webklex\PHPIMAP\Exceptions\AuthFailedException;
 use Webklex\PHPIMAP\Exceptions\ConnectionFailedException;
 
 /**
- * Manages runtime mail configuration from MailAccount instances.
+ * Gestiona la configuración de correo en tiempo de ejecución desde MailAccount.
  *
- * Registers dynamic SMTP mailers so Laravel's Mail facade can send
- * through user-configured accounts without hardcoding providers.
+ * Registra mailers SMTP dinámicos para que Mail envíe usando cuentas configuradas.
  */
 class MailAccountConfigService
 {
     /**
-     * Register a dynamic SMTP mailer at runtime from a MailAccount.
+     * Registra el mailer SMTP que usan el puente y las páginas de configuración.
      *
      * Returns a stable mailer name derived from the account ID so
      * repeated calls for the same account reuse the same config.
@@ -35,18 +34,32 @@ class MailAccountConfigService
 
         $mailerName = "mail_account_{$account->id}";
 
-        // Only register once per request lifecycle
+        // Registra una sola vez durante el ciclo de vida de la petición.
         if (Config::has("mail.mailers.{$mailerName}")) {
             return $mailerName;
         }
 
-        Config::set("mail.mailers.{$mailerName}", $account->smtpConfig());
+        $config = $account->smtpConfig();
+
+        if (! array_key_exists('scheme', $config)) {
+            $scheme = match ($config['encryption'] ?? null) {
+                'tls' => 'smtp',
+                'ssl' => 'smtps',
+                default => null,
+            };
+
+            if ($scheme !== null) {
+                $config['scheme'] = $scheme;
+            }
+        }
+
+        Config::set("mail.mailers.{$mailerName}", $config);
 
         return $mailerName;
     }
 
     /**
-     * Get IMAP configuration array for a MailAccount.
+     * Devuelve la configuración IMAP consumida por el proveedor y las verificaciones.
      *
      * This is a convenience wrapper — the actual config lives on the model.
      *
@@ -58,7 +71,7 @@ class MailAccountConfigService
     }
 
     /**
-     * Verify SMTP connectivity by performing a real connection + auth handshake.
+     * Comprueba conexión y autenticación SMTP sin enviar correo.
      *
      * Uses Symfony's EsmtpTransport start()/stop() to establish a socket
      * connection, perform EHLO, and authenticate — without sending any mail.
@@ -99,7 +112,7 @@ class MailAccountConfigService
     }
 
     /**
-     * Verify IMAP connectivity by performing a real connection + login.
+     * Comprueba conexión y autenticación IMAP sin leer mensajes.
      *
      * Uses webklex/php-imap ClientManager to create a temporary client,
      * connect (which includes authentication), then disconnect.
@@ -141,7 +154,7 @@ class MailAccountConfigService
     }
 
     /**
-     * Convert a Symfony SMTP TransportException into a user-friendly message.
+     * Traduce una excepción SMTP a un mensaje seguro para la interfaz.
      */
     private function humanizeSmtpError(TransportException $e): string
     {
@@ -163,7 +176,7 @@ class MailAccountConfigService
     }
 
     /**
-     * Convert a webklex IMAP exception into a user-friendly message.
+     * Traduce una excepción IMAP a un mensaje seguro para la interfaz.
      */
     private function humanizeImapError(\Throwable $e): string
     {

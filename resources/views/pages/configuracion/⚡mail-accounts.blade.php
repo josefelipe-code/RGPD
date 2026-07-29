@@ -31,11 +31,13 @@ new #[Title('Cuentas de correo')] class extends Component {
 
     protected ?User $currentUser = null;
 
+    /** Livewire inicializa filtros y la primera cuenta seleccionada. */
     public function mount(): void
     {
         abort_unless(Auth::user()->can('cuentas-correo.ver'), 403);
     }
 
+    /** Devuelve el usuario autenticado que autoriza la configuración. */
     protected function getUser(): User
     {
         return $this->currentUser ??= Auth::user();
@@ -44,6 +46,7 @@ new #[Title('Cuentas de correo')] class extends Component {
     /**
      * @return array<string, array<int, mixed>>
      */
+    /** Define las reglas de validación de una cuenta SMTP/IMAP. */
     protected function rules(): array
     {
         return [
@@ -62,17 +65,20 @@ new #[Title('Cuentas de correo')] class extends Component {
         ];
     }
 
+    /** Livewire reinicia la paginación al cambiar la búsqueda. */
     public function updatedSearch(): void
     {
         $this->resetPage();
     }
 
+    /** Livewire reinicia la paginación al cambiar el tamaño de página. */
     public function updatedPerPage(): void
     {
         $this->resetPage();
     }
 
     #[Computed]
+    /** Computed que pagina las cuentas visibles para el usuario. */
     public function mailAccounts()
     {
         return $this->getUser()->mailAccounts()
@@ -83,12 +89,14 @@ new #[Title('Cuentas de correo')] class extends Component {
             ->paginate($this->perPage);
     }
 
+    /** Acción `wire:click` que abre el alta de una cuenta. */
     public function create(): void
     {
         $this->authorizeAbility('cuentas-correo.crear');
         $this->resetForm();
     }
 
+    /** Acción `wire:click` que carga una cuenta para edición. */
     public function edit(int $id): void
     {
         $this->authorizeAbility('cuentas-correo.actualizar');
@@ -112,6 +120,7 @@ new #[Title('Cuentas de correo')] class extends Component {
         $this->resetErrorBag();
     }
 
+    /** Acción `wire:submit` que valida, prueba y guarda la cuenta. */
     public function save(): void
     {
         $isCreating = $this->editingMailAccountId === null;
@@ -127,10 +136,10 @@ new #[Title('Cuentas de correo')] class extends Component {
 
         $validated = $this->validate($rules);
 
-        // Verify SMTP connectivity before persisting
+            // Verifica la conectividad SMTP antes de persistir.
         $this->verifySmtpConnection($validated);
 
-        // Verify IMAP connectivity before persisting
+            // Verifica la conectividad IMAP antes de persistir.
         $this->verifyImapConnection($validated);
 
         if ($isCreating) {
@@ -159,10 +168,11 @@ new #[Title('Cuentas de correo')] class extends Component {
     }
 
     /**
-     * Verify SMTP connection using validated form data.
+     * Verifica la conexión SMTP usando los datos validados del formulario.
      *
      * @param  array<string, mixed>  $validated
      */
+    /** Prueba SMTP mediante MailAccountConfigService antes de guardar. */
     private function verifySmtpConnection(array $validated): void
     {
         $service = app(\App\Services\MailAccountConfigService::class);
@@ -185,10 +195,11 @@ new #[Title('Cuentas de correo')] class extends Component {
     }
 
     /**
-     * Verify IMAP connection using validated form data.
+     * Verifica la conexión IMAP usando los datos validados del formulario.
      *
      * @param  array<string, mixed>  $validated
      */
+    /** Prueba IMAP mediante MailAccountConfigService antes de guardar. */
     private function verifyImapConnection(array $validated): void
     {
         $service = app(\App\Services\MailAccountConfigService::class);
@@ -214,6 +225,7 @@ new #[Title('Cuentas de correo')] class extends Component {
         }
     }
 
+    /** Acción `wire:click` que activa o desactiva una cuenta. */
     public function toggle(int $id): void
     {
         $account = $this->getUser()->mailAccounts()->findOrFail($id);
@@ -225,6 +237,7 @@ new #[Title('Cuentas de correo')] class extends Component {
             : __('Cuenta desactivada.'));
     }
 
+    /** Acción `wire:click` que elimina una cuenta autorizada. */
     public function delete(int $id): void
     {
         $this->authorizeAbility('cuentas-correo.eliminar');
@@ -238,17 +251,20 @@ new #[Title('Cuentas de correo')] class extends Component {
         Flux::toast(variant: 'success', text: __('Cuenta de correo eliminada.'));
     }
 
+    /** Acción `wire:click` que cancela y limpia la edición. */
     public function cancel(): void
     {
         $this->resetForm();
         Flux::modal('mail-account-form')->close();
     }
 
+    /** Comprueba el permiso requerido por cada operación de cuentas. */
     private function authorizeAbility(string $ability): void
     {
         abort_unless(Auth::user()->can($ability), 403);
     }
 
+    /** Restablece el formulario y su cuenta en edición. */
     private function resetForm(): void
     {
         $this->reset([

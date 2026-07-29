@@ -14,18 +14,16 @@ use Illuminate\Mail\Mailables\Headers;
 use Illuminate\Queue\SerializesModels;
 
 /**
- * Outbound mailable for the mail bridge.
+ * Mailable de salida utilizado por el puente de correo.
  *
- * Renders a template body with optional signature appended.
- * Generates a deterministic Message-ID for threading (D6).
- * Implements ShouldQueue so all dispatches are queued by default.
+ * Renderiza el cuerpo con una firma opcional, se encola por defecto y se procesa después del commit; un fallo posterior del envío no revierte automáticamente la persistencia ya confirmada.
  */
 class OutboundMail extends Mailable implements ShouldQueue
 {
     use Queueable, SerializesModels;
 
     /**
-     * Create a new message instance.
+     * Construye el mensaje que envía el servicio MailBridgeService.
      *
      * @param  array<int, string>  $cc
      * @param  array<int, string>  $bcc
@@ -43,7 +41,7 @@ class OutboundMail extends Mailable implements ShouldQueue
     }
 
     /**
-     * Get the message envelope.
+     * Define remitente, destinatarios y asunto para Laravel Mail.
      */
     public function envelope(): Envelope
     {
@@ -57,7 +55,7 @@ class OutboundMail extends Mailable implements ShouldQueue
     }
 
     /**
-     * Get the message content definition.
+     * Selecciona las vistas HTML y texto que renderizan el mensaje.
      */
     public function content(): Content
     {
@@ -72,7 +70,8 @@ class OutboundMail extends Mailable implements ShouldQueue
     }
 
     /**
-     * Get the message headers.
+     * Genera el encabezado Message-ID para el mensaje saliente.
+     * El valor cambia entre instancias porque incorpora {@see uniqid()}.
      */
     public function headers(): Headers
     {
@@ -85,7 +84,7 @@ class OutboundMail extends Mailable implements ShouldQueue
     }
 
     /**
-     * Get the attachments for the message.
+     * Devuelve los adjuntos del mensaje, actualmente ninguno.
      *
      * @return array<int, Attachment>
      */

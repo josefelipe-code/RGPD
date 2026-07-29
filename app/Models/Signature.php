@@ -44,6 +44,7 @@ class Signature extends Model
     /**
      * Scope a query to only active signatures.
      */
+    /** Limita firmas a las habilitadas para composición de correo. */
     public function scopeActive($query)
     {
         return $query->where('is_active', true);
@@ -52,6 +53,7 @@ class Signature extends Model
     /**
      * Scope a query to only default signatures.
      */
+    /** Limita firmas a la predeterminada de una cuenta. */
     public function scopeDefault($query)
     {
         return $query->where('is_default', true);

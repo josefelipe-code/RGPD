@@ -22,7 +22,7 @@
 ])
 
 @php
-    $isUnread = $message->status?->value === 'new';
+    $isUnread = ! $message->is_read;
     $snippet = $message->body_text
         ? \Illuminate\Support\Str::limit(strip_tags($message->body_text), 80, '…')
         : null;

@@ -28,12 +28,14 @@ new class extends Component {
     /**
      * Mount the component.
      */
+    /** Livewire recibe la configuración de confirmación al montar el modal. */
     public function mount(bool $requiresConfirmation): void
     {
         $this->requiresConfirmation = $requiresConfirmation;
     }
 
     #[On('start-two-factor-setup')]
+    /** Acción `wire:click` que inicia la configuración de 2FA. */
     public function startTwoFactorSetup(): void
     {
         $enableTwoFactorAuthentication = app(EnableTwoFactorAuthentication::class);
@@ -45,6 +47,7 @@ new class extends Component {
     /**
      * Load the two-factor authentication setup data for the user.
      */
+    /** Carga secreto, código QR y códigos de recuperación desde Fortify. */
     private function loadSetupData(): void
     {
         $user = auth()->user()?->fresh();
@@ -66,6 +69,7 @@ new class extends Component {
     /**
      * Show the two-factor verification step if necessary.
      */
+    /** Acción de la vista que abre la verificación cuando la configuración lo exige. */
     public function showVerificationIfNecessary(): void
     {
         if ($this->requiresConfirmation) {
@@ -83,6 +87,7 @@ new class extends Component {
     /**
      * Confirm two-factor authentication for the user.
      */
+    /** Acción `wire:submit` que confirma el código TOTP mediante Fortify. */
     public function confirmTwoFactor(ConfirmTwoFactorAuthentication $confirmTwoFactorAuthentication): void
     {
         $this->validate();
@@ -99,6 +104,7 @@ new class extends Component {
     /**
      * Reset two-factor verification state.
      */
+    /** Acción `wire:click` que limpia el estado de verificación del modal. */
     public function resetVerification(): void
     {
         $this->reset('code', 'showVerificationStep');
@@ -107,8 +113,9 @@ new class extends Component {
     }
 
     /**
-     * Close the two-factor authentication modal.
+     * Cierra el modal de configuración de autenticación de dos factores.
      */
+    /** Acción `wire:click` que cierra el modal de configuración. */
     public function closeModal(): void
     {
         $this->reset(
@@ -123,9 +130,10 @@ new class extends Component {
     }
 
     /**
-     * Get the current modal configuration state.
+     * Devuelve el estado actual de configuración del modal.
      */
     #[Computed]
+    /** Computed que devuelve la configuración de apertura del modal. */
     public function modalConfig(): array
     {
         if ($this->setupComplete) {

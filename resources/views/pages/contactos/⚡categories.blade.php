@@ -20,6 +20,7 @@ new #[Title('Categorías')] class extends Component {
     public string $description = '';
     public string $color = '#3B82F6';
 
+    /** Livewire inicializa filtros y el formulario de categorías. */
     public function mount(): void
     {
         abort_unless(Auth::user()->can('categorias.ver'), 403);
@@ -38,17 +39,20 @@ new #[Title('Categorías')] class extends Component {
         ];
     }
 
+    /** Livewire reinicia la paginación al cambiar la búsqueda. */
     public function updatedSearch(): void
     {
         $this->resetPage();
     }
 
+    /** Livewire reinicia la paginación al cambiar el tamaño de página. */
     public function updatedPerPage(): void
     {
         $this->resetPage();
     }
 
     #[Computed]
+    /** Computed que filtra y pagina las categorías administrables. */
     public function categories()
     {
         return Category::query()
@@ -59,12 +63,14 @@ new #[Title('Categorías')] class extends Component {
             ->paginate($this->perPage);
     }
 
+    /** Acción `wire:click` que abre el alta de una categoría. */
     public function create(): void
     {
         $this->authorizeAbility('categorias.crear');
         $this->resetForm();
     }
 
+    /** Acción `wire:click` que carga una categoría para edición. */
     public function edit(int $categoryId): void
     {
         $this->authorizeAbility('categorias.actualizar');
@@ -80,6 +86,7 @@ new #[Title('Categorías')] class extends Component {
         $this->resetErrorBag();
     }
 
+    /** Acción `wire:submit` que valida y guarda la categoría. */
     public function save(): void
     {
         $isCreating = $this->editingCategoryId === null;
@@ -103,6 +110,7 @@ new #[Title('Categorías')] class extends Component {
             : __('Categoría actualizada.'));
     }
 
+    /** Acción `wire:click` que elimina una categoría autorizada. */
     public function delete(int $categoryId): void
     {
         $this->authorizeAbility('categorias.eliminar');
@@ -124,17 +132,20 @@ new #[Title('Categorías')] class extends Component {
         Flux::toast(variant: 'success', text: __('Categoría eliminada.'));
     }
 
+    /** Acción `wire:click` que cancela y limpia la edición. */
     public function cancel(): void
     {
         $this->resetForm();
         Flux::modal('category-form')->close();
     }
 
+    /** Comprueba el permiso requerido por las operaciones de categorías. */
     private function authorizeAbility(string $ability): void
     {
         abort_unless(Auth::user()->can($ability), 403);
     }
 
+    /** Restablece el formulario y la categoría en edición. */
     private function resetForm(): void
     {
         $this->reset([

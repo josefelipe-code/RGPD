@@ -77,6 +77,7 @@ class MailMessage extends Model
     /**
      * Scope a query to only incoming messages.
      */
+    /** Limita mensajes a los recibidos desde una cuenta. */
     public function scopeIncoming($query)
     {
         return $query->where('direction', MailDirection::Incoming);
@@ -85,6 +86,7 @@ class MailMessage extends Model
     /**
      * Scope a query to only outgoing messages.
      */
+    /** Limita mensajes a los enviados por la aplicación. */
     public function scopeOutgoing($query)
     {
         return $query->where('direction', MailDirection::Outgoing);
@@ -93,6 +95,7 @@ class MailMessage extends Model
     /**
      * Scope a query to only new/unassociated messages.
      */
+    /** Limita mensajes que todavía no están asociados a un expediente. */
     public function scopeUnassociated($query)
     {
         return $query->whereNull('case_id');

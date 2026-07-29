@@ -9,10 +9,11 @@ use Illuminate\Validation\Rule;
 trait ProfileValidationRules
 {
     /**
-     * Get the validation rules used to validate user profiles.
+     * Devuelve las reglas de validación usadas por los perfiles de usuario.
      *
      * @return array<string, array<int, ValidationRule|array<mixed>|string>>
      */
+    /** Reúne las reglas de nombre y correo usadas por la página de perfil. */
     protected function profileRules(?int $userId = null): array
     {
         return [
@@ -22,20 +23,22 @@ trait ProfileValidationRules
     }
 
     /**
-     * Get the validation rules used to validate user names.
+     * Devuelve las reglas de validación usadas para nombres de usuario.
      *
      * @return array<int, ValidationRule|array<mixed>|string>
      */
+    /** Define las reglas reutilizables para nombres de usuario. */
     protected function nameRules(): array
     {
         return ['required', 'string', 'max:255'];
     }
 
     /**
-     * Get the validation rules used to validate user emails.
+     * Devuelve las reglas de validación usadas para correos de usuario.
      *
      * @return array<int, ValidationRule|array<mixed>|string>
      */
+    /** Define las reglas de correo incluyendo la excepción del usuario actual. */
     protected function emailRules(?int $userId = null): array
     {
         return [

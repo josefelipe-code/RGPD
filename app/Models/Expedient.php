@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\DB;
+use LogicException;
 
 #[Fillable([
     'case_number',
@@ -20,10 +21,7 @@ use Illuminate\Support\Facades\DB;
     'provider_id',
     'mail_account_id',
     'assigned_user_id',
-    'status',
     'request_type',
-    'opened_at',
-    'closed_at',
 ])]
 class Expedient extends Model
 {
@@ -48,6 +46,7 @@ class Expedient extends Model
     {
         return [
             'status' => CaseStatus::class,
+            'phone_validated_at' => 'datetime',
             'opened_at' => 'datetime',
             'closed_at' => 'datetime',
             'deleted_at' => 'datetime',
@@ -95,8 +94,9 @@ class Expedient extends Model
     }
 
     /**
-     * Open the expedient: stamp opened_at and create an Opened milestone.
+     * Abre el expediente, registra la fecha y crea el hito correspondiente.
      */
+    /** Abre el expediente y registra la acción para la página de detalle. */
     public function open(User $creator): void
     {
         if ($this->opened_at !== null) {
@@ -104,7 +104,11 @@ class Expedient extends Model
         }
 
         DB::transaction(function () use ($creator) {
-            $this->update(['opened_at' => now()]);
+            $this->forceFill([
+                'status' => CaseStatus::PendingClient,
+                'opened_at' => now(),
+                'closed_at' => null,
+            ])->save();
             $this->milestones()->create([
                 'user_id' => $creator->id,
                 'action' => MilestoneAction::Opened,
@@ -112,75 +116,44 @@ class Expedient extends Model
         });
     }
 
-    /**
-     * Close the expedient: stamp closed_at and create a Closed milestone.
-     */
-    public function close(User $actor): CaseMilestone
+    public function validatePhone(User $actor): CaseMilestone
     {
         return DB::transaction(function () use ($actor) {
-            $this->update([
-                'status' => CaseStatus::Concluded,
-                'closed_at' => now(),
-            ]);
+            $this->assertStatus(CaseStatus::PendingClient, 'Phone validation is only available while awaiting the client.');
+
+            if ($this->phone_validated_at !== null) {
+                throw new LogicException('The client phone has already been validated.');
+            }
+
+            $this->forceFill(['phone_validated_at' => now()])->save();
 
             return $this->milestones()->create([
                 'user_id' => $actor->id,
-                'action' => MilestoneAction::Closed,
+                'action' => MilestoneAction::PhoneValidated,
             ]);
         });
     }
 
-    /**
-     * Reopen a concluded expedient: clear closed_at and create a Reopened milestone.
-     */
-    public function reopen(CaseStatus $target, User $actor, ?string $notes = null): CaseMilestone
+    public function confirmProvider(User $actor): CaseMilestone
     {
-        return DB::transaction(function () use ($target, $actor, $notes) {
-            $this->update([
-                'status' => $target,
-                'closed_at' => null,
-            ]);
-
-            return $this->milestones()->create([
-                'user_id' => $actor->id,
-                'action' => MilestoneAction::Reopened,
-                'notes' => $notes,
-            ]);
-        });
+        return $this->conclude($actor, MilestoneAction::ProviderConfirmed);
     }
 
-    /**
-     * Transition the expedient to a new status, triggering lifecycle side-effects.
-     */
-    public function transitionTo(CaseStatus $target, User $actor, ?string $notes = null): ?CaseMilestone
+    public function markClientFingerprintSent(User $actor): CaseMilestone
     {
-        $wasConcluded = $this->status === CaseStatus::Concluded;
-        $isConcluding = $target === CaseStatus::Concluded;
-
-        if ($wasConcluded && ! $isConcluding) {
-            return $this->reopen($target, $actor, $notes);
-        }
-
-        if ($isConcluding && ! $wasConcluded) {
-            return $this->close($actor);
-        }
-
-        // Non-concluding status change — just update status
-        if ($this->status !== $target) {
-            $this->update(['status' => $target]);
-        }
-
-        return null;
+        return $this->conclude($actor, MilestoneAction::ClientFingerprintSent);
     }
 
     /**
      * Reply to client: transition to PendingClient and create a RepliedClient milestone
      * linked to the outbound mail message.
      */
+    /** Registra que el expediente recibió una respuesta dirigida al cliente. */
     public function replyClient(MailMessage $outgoing, User $actor): CaseMilestone
     {
         return DB::transaction(function () use ($outgoing, $actor) {
-            $this->update(['status' => CaseStatus::PendingClient]);
+            $this->assertCanReplyClient();
+            $this->assertOutgoingMessage($outgoing);
 
             return $this->milestones()->create([
                 'user_id' => $actor->id,
@@ -194,10 +167,13 @@ class Expedient extends Model
      * Forward to provider: transition to PendingProvider and create a RepliedProvider
      * milestone linked to the outbound mail message.
      */
+    /** Registra que el expediente recibió un envío dirigido al proveedor. */
     public function forwardProvider(MailMessage $outgoing, User $actor): CaseMilestone
     {
         return DB::transaction(function () use ($outgoing, $actor) {
-            $this->update(['status' => CaseStatus::PendingProvider]);
+            $this->assertCanForwardProvider();
+            $this->assertOutgoingMessage($outgoing);
+            $this->forceFill(['status' => CaseStatus::PendingProvider])->save();
 
             return $this->milestones()->create([
                 'user_id' => $actor->id,
@@ -207,9 +183,54 @@ class Expedient extends Model
         });
     }
 
+    public function assertCanReplyClient(): void
+    {
+        $this->assertStatus(CaseStatus::PendingClient, 'Client replies are only available while awaiting the client.');
+    }
+
+    public function assertCanForwardProvider(): void
+    {
+        $this->assertStatus(CaseStatus::PendingClient, 'Provider outreach is only available while awaiting the client.');
+
+        if ($this->phone_validated_at === null) {
+            throw new LogicException('Validate the client phone before contacting the provider.');
+        }
+    }
+
+    private function conclude(User $actor, MilestoneAction $action): CaseMilestone
+    {
+        return DB::transaction(function () use ($actor, $action) {
+            $this->assertStatus(CaseStatus::PendingProvider, 'Only provider-pending expedients can be concluded.');
+            $this->forceFill([
+                'status' => CaseStatus::Concluded,
+                'closed_at' => now(),
+            ])->save();
+
+            return $this->milestones()->create([
+                'user_id' => $actor->id,
+                'action' => $action,
+            ]);
+        });
+    }
+
+    private function assertStatus(CaseStatus $expected, string $message): void
+    {
+        if ($this->status !== $expected) {
+            throw new LogicException($message);
+        }
+    }
+
+    private function assertOutgoingMessage(MailMessage $outgoing): void
+    {
+        if ($outgoing->case_id !== $this->id || $outgoing->mail_account_id !== $this->mail_account_id) {
+            throw new LogicException('The outgoing message does not belong to this expedient.');
+        }
+    }
+
     /**
      * Scope a query to only open expedients.
      */
+    /** Limita consultas a expedientes que aún están abiertos. */
     public function scopeOpen($query)
     {
         return $query->whereNot('status', CaseStatus::Concluded);
@@ -218,6 +239,7 @@ class Expedient extends Model
     /**
      * Scope a query to only concluded expedients.
      */
+    /** Limita consultas a expedientes concluidos. */
     public function scopeConcluded($query)
     {
         return $query->where('status', CaseStatus::Concluded);
@@ -226,6 +248,7 @@ class Expedient extends Model
     /**
      * Scope a query to expedients assigned to a specific user.
      */
+    /** Limita consultas a expedientes asignados a un usuario concreto. */
     public function scopeAssignedTo($query, User $user)
     {
         return $query->where('assigned_user_id', $user->id);
@@ -234,6 +257,7 @@ class Expedient extends Model
     /**
      * Scope a query to expedients belonging to a specific mail account.
      */
+    /** Limita consultas a la cuenta de correo asociada. */
     public function scopeForMailAccount($query, int $mailAccountId)
     {
         return $query->where('mail_account_id', $mailAccountId);
@@ -242,6 +266,7 @@ class Expedient extends Model
     /**
      * Scope a query to expedients sharing a sender email.
      */
+    /** Busca expedientes cuyo remitente coincide con el correo indicado. */
     public function scopeRelatedByEmail($query, string $email)
     {
         return $query->where('sender_email', $email);
@@ -250,6 +275,7 @@ class Expedient extends Model
     /**
      * Scope a query to expedients sharing a sender phone.
      */
+    /** Busca expedientes cuyo teléfono coincide con el valor indicado. */
     public function scopeRelatedByPhone($query, string $phone)
     {
         return $query->where('sender_phone', $phone);
@@ -259,6 +285,7 @@ class Expedient extends Model
      * Scope a query to expedients related by email or phone,
      * excluding self and soft-deleted records, capped at $limit.
      */
+    /** Combina criterios de correo y teléfono para sugerir expedientes relacionados. */
     public function scopeRelatedTo($query, ?string $email, ?string $phone, int $limit = 5, ?int $excludeId = null)
     {
         $excludeId = $excludeId ?? $this->id ?? 0;

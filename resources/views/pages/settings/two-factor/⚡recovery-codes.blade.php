@@ -11,6 +11,7 @@ new class extends Component {
     /**
      * Mount the component.
      */
+    /** Livewire carga los códigos de recuperación al montar el componente. */
     public function mount(): void
     {
         $this->loadRecoveryCodes();
@@ -19,6 +20,7 @@ new class extends Component {
     /**
      * Generate new recovery codes for the user.
      */
+    /** Acción `wire:click` que genera un nuevo conjunto de códigos con Fortify. */
     public function regenerateRecoveryCodes(GenerateNewRecoveryCodes $generateNewRecoveryCodes): void
     {
         $generateNewRecoveryCodes(auth()->user());
@@ -29,6 +31,7 @@ new class extends Component {
     /**
      * Load the recovery codes for the user.
      */
+    /** Lee los códigos actuales del usuario para mostrarlos en la vista. */
     private function loadRecoveryCodes(): void
     {
         $user = auth()->user();

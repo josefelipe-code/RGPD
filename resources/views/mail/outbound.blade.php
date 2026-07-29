@@ -1,9 +1,8 @@
-<x-mail::message>
+<div>
+    {!! $body !!}
 
-{!! $body !!}
-
-@if ($signature)
-{!! $signature !!}
-@endif
-
-</x-mail::message>
+    @if ($signature)
+        <br>
+        {!! $signature !!}
+    @endif
+</div>

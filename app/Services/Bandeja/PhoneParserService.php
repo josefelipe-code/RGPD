@@ -17,6 +17,10 @@ class PhoneParserService
      * @param  string  $text  The email body text to scan
      * @return string|null E.164 formatted phone or null
      */
+    /**
+     * Extrae y normaliza un teléfono del texto consumido por la clasificación
+     * de mensajes y la creación de expedientes.
+     */
     public function parse(string $text): ?string
     {
         // Match international format: +XX XXX XXX XXX or +XXXXXXXXXXX

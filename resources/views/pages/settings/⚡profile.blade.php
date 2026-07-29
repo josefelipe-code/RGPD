@@ -17,6 +17,7 @@ new #[Title('Profile settings')] class extends Component {
     /**
      * Mount the component.
      */
+    /** Livewire carga los datos actuales del perfil al montar la página. */
     public function mount(): void
     {
         $this->name = Auth::user()->name;
@@ -26,6 +27,7 @@ new #[Title('Profile settings')] class extends Component {
     /**
      * Update the profile information for the currently authenticated user.
      */
+    /** Acción `wire:submit` que valida y actualiza el perfil autenticado. */
     public function updateProfileInformation(): void
     {
         $user = Auth::user();
@@ -46,6 +48,7 @@ new #[Title('Profile settings')] class extends Component {
     /**
      * Send an email verification notification to the current user.
      */
+    /** Acción `wire:click` que solicita a Laravel reenviar la verificación. */
     public function resendVerificationNotification(): void
     {
         $user = Auth::user();
@@ -62,12 +65,14 @@ new #[Title('Profile settings')] class extends Component {
     }
 
     #[Computed]
+    /** Indica si la plantilla debe mostrar la acción de verificación. */
     public function hasUnverifiedEmail(): bool
     {
         return Auth::user() instanceof MustVerifyEmail && ! Auth::user()->hasVerifiedEmail();
     }
 
     #[Computed]
+    /** Indica si el usuario actual puede abrir el modal de eliminación. */
     public function showDeleteUser(): bool
     {
         return ! Auth::user() instanceof MustVerifyEmail

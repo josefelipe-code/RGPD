@@ -21,14 +21,16 @@
 @if ($message)
     <div class="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-sm">
         {{-- Toolbar: subject + status + meta actions --}}
-        <x-mail.reader-toolbar
-            :message="$message"
-            :statusLabels="$statusLabels"
-            :statusColors="$statusColors"
-        />
+        <div class="shrink-0">
+            <x-mail.reader-toolbar
+                :message="$message"
+                :statusLabels="$statusLabels"
+                :statusColors="$statusColors"
+            />
+        </div>
 
         {{-- Sender identity block --}}
-        <div class="flex items-start gap-3 px-5 py-4 border-b border-zinc-100 dark:border-zinc-800">
+        <div class="flex shrink-0 items-start gap-3 border-b border-zinc-100 px-5 py-4 dark:border-zinc-800">
             <flux:avatar
                 :name="$message->from_name ?? $message->from_email"
                 size="md"
@@ -64,7 +66,7 @@
 
         {{-- Action bar --}}
         @isset($actions)
-            <div class="flex items-center gap-2 px-5 py-3 border-t border-zinc-100 dark:border-zinc-800 bg-zinc-50/80 dark:bg-zinc-800/40 flex-wrap">
+            <div class="flex shrink-0 flex-wrap items-center gap-2 border-t border-zinc-100 bg-zinc-50/80 px-5 py-3 dark:border-zinc-800 dark:bg-zinc-800/40">
                 {{ $actions }}
             </div>
         @endisset

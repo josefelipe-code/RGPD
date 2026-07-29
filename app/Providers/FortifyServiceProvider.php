@@ -16,6 +16,7 @@ class FortifyServiceProvider extends ServiceProvider
     /**
      * Register any application services.
      */
+    /** Registra servicios requeridos por Fortify en el contenedor. */
     public function register(): void
     {
         //
@@ -24,6 +25,7 @@ class FortifyServiceProvider extends ServiceProvider
     /**
      * Bootstrap any application services.
      */
+    /** Configura acciones, vistas y límites de autenticación al iniciar Laravel. */
     public function boot(): void
     {
         $this->configureActions();
@@ -34,6 +36,7 @@ class FortifyServiceProvider extends ServiceProvider
     /**
      * Configure Fortify actions.
      */
+    /** Asocia las acciones propias con los contratos de Fortify. */
     private function configureActions(): void
     {
         Fortify::resetUserPasswordsUsing(ResetUserPassword::class);
@@ -43,6 +46,7 @@ class FortifyServiceProvider extends ServiceProvider
     /**
      * Configure Fortify views.
      */
+    /** Registra las vistas Livewire usadas por las pantallas de autenticación. */
     private function configureViews(): void
     {
         Fortify::loginView(fn () => view('pages::auth.login'));
@@ -56,12 +60,15 @@ class FortifyServiceProvider extends ServiceProvider
     /**
      * Configure rate limiting.
      */
+    /** Configura los límites de login y segundo factor de Fortify. */
     private function configureRateLimiting(): void
     {
+        // La closure limita intentos de verificación por usuario y dirección.
         RateLimiter::for('two-factor', function (Request $request) {
             return Limit::perMinute(5)->by($request->session()->get('login.id'));
         });
 
+        // La closure limita el login por correo e IP para evitar abuso.
         RateLimiter::for('login', function (Request $request) {
             $throttleKey = Str::transliterate(Str::lower($request->input(Fortify::username())).'|'.$request->ip());
 

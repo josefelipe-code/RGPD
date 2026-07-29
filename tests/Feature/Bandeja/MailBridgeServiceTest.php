@@ -32,7 +32,7 @@ it('sends reply to client and transitions expedient to pending_client', function
     Mail::fake();
 
     $expedient = Expedient::factory()->for($this->account)->create([
-        'status' => CaseStatus::PendingProvider,
+        'status' => CaseStatus::PendingClient,
         'sender_email' => 'client@example.com',
     ]);
     $origin = MailMessage::factory()->for($this->account)->create([
@@ -40,6 +40,8 @@ it('sends reply to client and transitions expedient to pending_client', function
         'from_email' => 'client@example.com',
         'subject' => 'Original subject',
     ]);
+
+    $expedient->validatePhone($this->user);
 
     $result = $this->service->send(
         account: $this->account,
@@ -86,6 +88,8 @@ it('sends forward to provider and transitions expedient to pending_provider', fu
         'subject' => 'Original subject',
     ]);
 
+    $expedient->validatePhone($this->user);
+
     $result = $this->service->send(
         account: $this->account,
         mode: 'forward_provider',
@@ -119,6 +123,8 @@ it('includes bcc recipients on provider forward', function () {
         'case_id' => $expedient->id,
         'from_email' => 'client@example.com',
     ]);
+
+    $expedient->validatePhone($this->user);
 
     $this->service->send(
         account: $this->account,

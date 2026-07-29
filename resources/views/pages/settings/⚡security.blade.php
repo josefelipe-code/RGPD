@@ -27,6 +27,7 @@ new #[Title('Security settings')] class extends Component {
     /**
      * Mount the component.
      */
+    /** Livewire carga el estado de contraseña y segundo factor del usuario. */
     public function mount(DisableTwoFactorAuthentication $disableTwoFactorAuthentication): void
     {
         $this->canManageTwoFactor = Features::canManageTwoFactorAuthentication();
@@ -44,6 +45,7 @@ new #[Title('Security settings')] class extends Component {
     /**
      * Update the password for the currently authenticated user.
      */
+    /** Acción `wire:submit` que valida y actualiza la contraseña. */
     public function updatePassword(): void
     {
         try {
@@ -70,6 +72,7 @@ new #[Title('Security settings')] class extends Component {
      * Handle the two-factor authentication enabled event.
      */
     #[On('two-factor-enabled')]
+    /** Acción invocada por la vista cuando finaliza la activación de 2FA. */
     public function onTwoFactorEnabled(): void
     {
         $this->twoFactorEnabled = true;
@@ -78,6 +81,7 @@ new #[Title('Security settings')] class extends Component {
     /**
      * Disable two-factor authentication for the user.
      */
+    /** Acción `wire:click` que desactiva 2FA mediante la acción de Fortify. */
     public function disable(DisableTwoFactorAuthentication $disableTwoFactorAuthentication): void
     {
         $disableTwoFactorAuthentication(auth()->user());

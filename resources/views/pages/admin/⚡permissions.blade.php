@@ -19,16 +19,19 @@ new #[Title('Permisos')] class extends Component {
     public ?int $editingPermissionId = null;
     public string $name = '';
 
+    /** Livewire reinicia la paginación al cambiar la búsqueda. */
     public function updatedSearch(): void
     {
         $this->resetPage();
     }
 
+    /** Livewire reinicia la paginación al cambiar el tamaño de página. */
     public function updatedPerPage(): void
     {
         $this->resetPage();
     }
 
+    /** Livewire inicializa el formulario de permisos. */
     public function mount(): void
     {
         abort_unless(Auth::user()->can('permisos.ver'), 403);
@@ -37,6 +40,7 @@ new #[Title('Permisos')] class extends Component {
     /**
      * @return array<string, array<int, mixed>>
      */
+    /** Define la validación de permisos. */
     protected function rules(): array
     {
         return [
@@ -50,6 +54,7 @@ new #[Title('Permisos')] class extends Component {
     }
 
     #[Computed]
+    /** Computed que filtra y pagina los permisos administrables. */
     public function permissions()
     {
         return Permission::query()
@@ -59,12 +64,14 @@ new #[Title('Permisos')] class extends Component {
             ->paginate($this->perPage);
     }
 
+    /** Acción `wire:click` que abre el alta de un permiso. */
     public function create(): void
     {
         $this->authorizeAbility('permisos.crear');
         $this->resetForm();
     }
 
+    /** Acción `wire:click` que carga un permiso para edición. */
     public function edit(int $permissionId): void
     {
         $this->authorizeAbility('permisos.actualizar');
@@ -77,6 +84,7 @@ new #[Title('Permisos')] class extends Component {
         $this->resetErrorBag();
     }
 
+    /** Acción `wire:submit` que valida y guarda el permiso. */
     public function save(): void
     {
         $isCreating = $this->editingPermissionId === null;
@@ -107,6 +115,7 @@ new #[Title('Permisos')] class extends Component {
             : __('Permiso actualizado.'));
     }
 
+    /** Acción `wire:click` que elimina un permiso autorizado. */
     public function delete(int $permissionId): void
     {
         $this->authorizeAbility('permisos.eliminar');
@@ -130,17 +139,20 @@ new #[Title('Permisos')] class extends Component {
         Flux::toast(variant: 'success', text: __('Permiso eliminado.'));
     }
 
+    /** Acción `wire:click` que cancela y limpia la edición. */
     public function cancel(): void
     {
         $this->resetForm();
         Flux::modal('permission-form')->close();
     }
 
+    /** Comprueba el permiso necesario para administrar permisos. */
     private function authorizeAbility(string $ability): void
     {
         abort_unless(Auth::user()->can($ability), 403);
     }
 
+    /** Restablece el formulario y el permiso en edición. */
     private function resetForm(): void
     {
         $this->reset([
