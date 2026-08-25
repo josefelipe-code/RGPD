@@ -56,14 +56,15 @@ Antes de implementar, consultá **Laravel Boost** para seguir la configuración 
 10. Cambio manual de estado por usuario.
 11. Preparar sincronización de movimiento de correo a carpeta según estado, si la infraestructura ya existe; si no, dejar contrato claro de integración.
 12. Subflujo de comunicaciones salientes dentro del expediente:
-    - responder al cliente,
-    - contactar al proveedor,
-    - seleccionar plantilla base según contexto,
-    - editar asunto y cuerpo antes del envío,
-    - seleccionar cuenta emisora y firma,
-    - aplicar regla de copia oculta (BCC) a cuenta de soporte en comunicaciones al proveedor,
-    - registrar el mensaje saliente como hito auditable del expediente,
-    - sugerir transición de estado después del envío, sin forzarla automáticamente.
+     - responder al cliente,
+     - contactar al proveedor,
+     - seleccionar una plantilla disponible compatible con el destinatario (cliente o proveedor),
+     - editar asunto y cuerpo antes del envío,
+     - usar la cuenta del buzón sincronizado fijada al expediente, sin permitir cambiarla en el composer,
+     - seleccionar firma y plantilla compatibles con la cuenta,
+     - imponer desde servidor el BCC de soporte obligatorio configurado para la cuenta operativa; cualquier BCC manual es adicional y debe deduplicarse,
+     - registrar el mensaje saliente como hito auditable del expediente,
+     - aplicar la transición obligatoria del flujo después del despacho satisfactorio.
 
 ## Restricciones de propiedad
 
@@ -77,10 +78,21 @@ Antes de implementar, consultá **Laravel Boost** para seguir la configuración 
 - Un expediente concluido en principio no se reabre; si hay nueva gestión, se crea uno nuevo con referencia a anteriores.
 - Las respuestas entrantes no cambian estado solas: disparan revisión humana.
 - El expediente debe mostrar progreso por etapas, no centrarse solo en timeline.
-- Los envíos salientes son siempre supervisados: el sistema sugiere plantilla, cuenta y firma; el usuario edita y confirma.
-- Las transiciones de estado tras un envío son sugerencias, no cambios automáticos.
-- Todo envío a proveedor debe incluir copia oculta (BCC) a la cuenta de soporte configurada.
-- Cada mensaje saliente debe registrarse como hito auditable del expediente.
+- Los envíos salientes son siempre supervisados: el sistema ofrece plantilla y firma compatibles con la cuenta fija; el usuario edita y confirma.
+- La cuenta del buzón sincronizado queda fijada al expediente y no puede cambiarse desde el composer.
+- El composer permite seleccionar únicamente plantillas disponibles compatibles con el destinatario: cliente o proveedor.
+- No se puede reenviar a un proveedor sin una respuesta previa al cliente.
+- El flujo obligatorio es: respuesta al cliente → `PendingClient`; después, reenvío al proveedor → `PendingProvider`. Tras el reenvío, el estado queda fijado en `PendingProvider`.
+- Cada cuenta de correo operativa tiene un único BCC de soporte obligatorio. El servidor debe imponerlo y la UI no puede eliminarlo; si se admite BCC manual, este es adicional y se deduplica.
+- Cualquier usuario puede gestionar el expediente según sus permisos; no existe una restricción adicional basada en asignación o responsable.
+- El sistema debe conservar auditoría del usuario que realizó cada acción o fase del expediente, incluido cada mensaje saliente.
+- El despacho se considera satisfactorio solo si el mensaje queda en Enviados. Si queda en Bandeja de salida o Borradores, se registra y maneja como fallo. Esto acredita el despacho al buzón, no la entrega final al destinatario.
+
+## Cambios técnicos previstos
+
+- Configuración de un BCC de soporte obligatorio por cuenta operativa, aplicado y deduplicado del lado servidor.
+- Selección de firma y plantilla compatible con la cuenta fija del expediente y con el destinatario correspondiente.
+- Auditoría de usuario y acción para cada fase y comunicación del expediente.
 
 ## Entregables esperados
 

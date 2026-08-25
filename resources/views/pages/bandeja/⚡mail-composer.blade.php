@@ -22,6 +22,7 @@ new class extends Component {
     public string $body = '';
     public ?int $templateId = null;
     public bool $sending = false;
+    public string $stateDeadline = '';
 
     /** Livewire inicializa el compositor con el expediente, origen y firma elegidos. */
     public function mount(): void
@@ -48,12 +49,13 @@ new class extends Component {
         if ($this->mode === 'reply_client') {
             $this->to = $origin->from_email ?? $expedient->sender_email ?? '';
             $this->subject = 'Re: '.($origin->subject ?? '');
+            $this->stateDeadline = $expedient->state_deadline?->format('Y-m-d\\TH:i') ?? '';
         } else {
             $this->subject = 'Fwd: '.($origin->subject ?? '');
         }
 
-        // Auto-select missing-phone template when expedient has no phone
-        if (blank($expedient->sender_phone)) {
+        // A phone request is required until the client's number is validated.
+        if ($this->mode === 'reply_client' && $expedient->phone_validated_at === null) {
             $missingPhone = Template::forPurpose('missing_phone')->active()->first();
             if ($missingPhone) {
                 $this->templateId = $missingPhone->id;
@@ -123,6 +125,7 @@ new class extends Component {
             'body' => ['required', 'string'],
             'subject' => ['required', 'string', 'max:255'],
             'templateId' => ['nullable', 'exists:templates,id'],
+            'stateDeadline' => ['nullable', 'date', 'after:now'],
         ];
 
         if ($this->mode === 'forward_provider') {
@@ -167,6 +170,7 @@ new class extends Component {
                 'subject' => $validated['subject'],
                 'cc' => $cc,
                 'bcc' => $bcc,
+                'state_deadline' => $validated['stateDeadline'] ?: null,
             ],
         );
 
@@ -249,6 +253,12 @@ new class extends Component {
             <flux:label>{{ __('Cuerpo') }} <flux:badge size="sm" color="red">*</flux:badge></flux:label>
             <flux:textarea wire:model="body" rows="8" />
             <flux:error name="body" />
+        </flux:field>
+
+        <flux:field>
+            <flux:label>{{ __('Vencimiento del estado') }}</flux:label>
+            <flux:input wire:model="stateDeadline" type="datetime-local" />
+            <flux:error name="stateDeadline" />
         </flux:field>
 
         {{-- Actions --}}

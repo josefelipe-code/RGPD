@@ -1,7 +1,10 @@
 <?php
 
+use App\Enums\MailDirection;
+use App\Enums\MailMessageStatus;
 use App\Mail\ImapOutboundMail;
 use App\Models\Contact;
+use App\Models\Expedient;
 use App\Models\MailAccount;
 use App\Models\MailMessage;
 use App\Models\Signature;
@@ -174,6 +177,7 @@ it('handles deferred body failures and rejects a body fetch outside the selected
 
 it('uses account, folder, and UID for move and trash operations', function () {
     $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $account->expedientStates()->create(['name' => 'Archive', 'key' => 'archive', 'imap_folder' => 'Archive']);
     $localMessage = MailMessage::factory()->for($account)->create([
         'imap_uid' => '42',
         'folder' => 'INBOX',
@@ -248,7 +252,7 @@ it('bounds the inbox panes and keeps their overflow surfaces independent', funct
         ->and($html)->toContain('shrink-0');
 });
 
-it('does not render or expose legacy expediente and discard actions', function () {
+it('does not render discard actions and keeps expediente actions scoped to explicit confirmation', function () {
     $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
 
     $component = Livewire::actingAs($this->user)
@@ -256,10 +260,48 @@ it('does not render or expose legacy expediente and discard actions', function (
 
     $html = $component->html();
 
-    expect($html)->not->toContain('associateMessage')
-        ->and($html)->not->toContain('createExpedientFromMessage')
-        ->and($html)->not->toContain('suggestNewCase')
-        ->and($html)->not->toContain('wire:click="discard');
+    expect($html)->not->toContain('wire:click="discard');
+});
+
+it('prefills, reviews, and confirms creating an expedient from a transient INBOX envelope', function () {
+    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('listFolders')->andReturn(collect([['path' => 'INBOX', 'name' => 'INBOX']]));
+    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([inboxEnvelope(42, 'Access request')]));
+    $this->instance(ImapMailboxService::class, $mailbox);
+
+    $component = Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->call('openCreateExpedient', 42)
+        ->assertSet('createExpedientOpen', true)
+        ->assertSet('createExpedientEmail', 'sender42@example.com')
+        ->assertSet('createExpedientType', 'Access request')
+        ->set('createExpedientNumber', 'EXP-INBOX-42')
+        ->call('saveCreatedExpedient');
+
+    $expedient = Expedient::query()->where('case_number', 'EXP-INBOX-42')->sole();
+    $component->assertRedirect(route('expedientes.show', $expedient));
+
+    expect($expedient->imapMessageReferences)->toHaveCount(1)
+        ->and($expedient->imapMessageReferences->sole()->subject)->toBe('Access request')
+        ->and($expedient->mailMessages)->toHaveCount(1)
+        ->and($expedient->mailMessages->sole()->direction)->toBe(MailDirection::Incoming)
+        ->and($expedient->mailMessages->sole()->status)->toBe(MailMessageStatus::Associated)
+        ->and($expedient->mailMessages->sole()->body_html)->toBeNull()
+        ->and($expedient->mailMessages->sole()->body_text)->toBeNull();
+});
+
+it('treats an empty inbox move destination as validation rather than authorization', function () {
+    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('listFolders')->andReturn(collect([['path' => 'INBOX', 'name' => 'INBOX']]));
+    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([inboxEnvelope(42, 'Move me')]));
+    $this->instance(ImapMailboxService::class, $mailbox);
+
+    Livewire::actingAs($this->user)
+        ->test('pages::bandeja.inbox')
+        ->call('moveMessage', 42, '')
+        ->assertHasErrors('moveTargetFolder');
 });
 
 it('does not load an account belonging to another user', function () {

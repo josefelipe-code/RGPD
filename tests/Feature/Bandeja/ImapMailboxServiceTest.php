@@ -31,6 +31,16 @@ it('lists folders through the IMAP provider', function () {
         ->and($folders->first()['path'])->toBe('INBOX');
 });
 
+it('creates a remote folder through the IMAP provider seam', function () {
+    $provider = Mockery::mock(ImapProvider::class);
+    $provider->shouldReceive('createFolder')
+        ->once()
+        ->with($this->account, 'Cases/Review')
+        ->andReturn('Cases/Review');
+
+    expect((new ImapMailboxService($provider))->createFolder($this->account, 'Cases/Review'))->toBe('Cases/Review');
+});
+
 it('persists only envelope metadata when syncing an IMAP folder', function () {
     $provider = Mockery::mock(ImapProvider::class);
     $provider->shouldReceive('listEnvelopes')

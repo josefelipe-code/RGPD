@@ -9,6 +9,9 @@ Route::middleware(['auth', 'verified', 'can:expedientes.ver'])
         Route::livewire('/', 'pages::expedientes.index')
             ->name('index');
 
+        Route::livewire('/states', 'pages::expedientes.states')
+            ->name('states.index');
+
         Route::livewire('/{expedient}', 'pages::expedientes.show')
             ->name('show');
     });

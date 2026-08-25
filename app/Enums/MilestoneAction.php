@@ -8,8 +8,10 @@ enum MilestoneAction: string
     case RepliedClient = 'replied_client';
     case RepliedProvider = 'replied_provider';
     case PhoneValidated = 'phone_validated';
+    case DeadlineUpdated = 'deadline_updated';
     case ProviderConfirmed = 'provider_confirmed';
     case ClientFingerprintSent = 'client_fingerprint_sent';
     case Closed = 'closed';
     case Reopened = 'reopened';
+    case StateChanged = 'state_changed';
 }

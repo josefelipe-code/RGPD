@@ -17,7 +17,7 @@ beforeEach(function () {
     $this->admin = User::factory()->create();
     $this->admin->assignRole('Super Administrador');
 
-    $this->mailAccount = MailAccount::factory()->create(['label' => 'Test Account']);
+    $this->mailAccount = MailAccount::factory()->for($this->admin)->create(['label' => 'Test Account']);
 });
 
 // Create tests

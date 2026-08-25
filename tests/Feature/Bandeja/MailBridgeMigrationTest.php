@@ -1,14 +1,15 @@
 <?php
 
 use App\Models\CaseMilestone;
+use App\Models\MailAccount;
 use App\Models\MailMessage;
 use App\Models\Template;
-use App\Services\Bandeja\ImapSyncService;
+use App\Services\Bandeja\ImapMailboxService;
+use App\Services\Bandeja\ImapProvider;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Schema;
-use Webklex\PHPIMAP\Attribute;
-use Webklex\PHPIMAP\Support\FlagCollection;
 
 uses(RefreshDatabase::class);
 
@@ -203,40 +204,34 @@ it('case_milestone factory has withMailMessage state', function () {
     expect($milestone->mail_message_id)->toBe($mailMessage->id);
 });
 
-// ── Task 1.7: ImapSyncService header capture ──
+// ── Task 1.7: IMAP envelope threading capture ──
 
-it('captures in_reply_to and references headers from IMAP message', function () {
-    $service = new class extends ImapSyncService
-    {
-        public function testExtractHeaders($headers): array
-        {
-            return $this->extractThreadingHeaders($headers);
-        }
-    };
+it('captures in_reply_to and references from an IMAP envelope', function () {
+    $account = MailAccount::factory()->create();
+    $provider = Mockery::mock(ImapProvider::class);
+    $provider->shouldReceive('listEnvelopes')->once()->with($account, 'INBOX')->andReturn(new Collection([
+        [
+            'uid' => 1,
+            'in_reply_to' => '<original@example.com>',
+            'references' => '<ref1@example.com> <ref2@example.com>',
+        ],
+    ]));
 
-    $headers = new FlagCollection;
-    $headers->put('in_reply_to', new Attribute('in_reply_to', '<original@example.com>'));
-    $headers->put('references', new Attribute('references', '<ref1@example.com> <ref2@example.com>'));
+    $message = (new ImapMailboxService($provider))->syncFolder($account)->first();
 
-    $result = $service->testExtractHeaders($headers);
-
-    expect($result['in_reply_to'])->toBe('<original@example.com>')
-        ->and($result['references'])->toBe('<ref1@example.com> <ref2@example.com>');
+    expect($message->in_reply_to)->toBe('<original@example.com>')
+        ->and($message->references)->toBe(['<ref1@example.com>', '<ref2@example.com>']);
 });
 
-it('returns null for missing threading headers', function () {
-    $service = new class extends ImapSyncService
-    {
-        public function testExtractHeaders($headers): array
-        {
-            return $this->extractThreadingHeaders($headers);
-        }
-    };
+it('returns null for missing threading fields in an IMAP envelope', function () {
+    $account = MailAccount::factory()->create();
+    $provider = Mockery::mock(ImapProvider::class);
+    $provider->shouldReceive('listEnvelopes')->once()->with($account, 'INBOX')->andReturn(new Collection([
+        ['uid' => 1],
+    ]));
 
-    $headers = new FlagCollection;
+    $message = (new ImapMailboxService($provider))->syncFolder($account)->first();
 
-    $result = $service->testExtractHeaders($headers);
-
-    expect($result['in_reply_to'])->toBeNull()
-        ->and($result['references'])->toBeNull();
+    expect($message->in_reply_to)->toBeNull()
+        ->and($message->references)->toBeNull();
 });

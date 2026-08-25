@@ -15,11 +15,13 @@ new #[Title('Detalle del Expediente')] class extends Component {
     // Mail composer state
     public ?string $composerMode = null;
     public ?int $composerOriginMessageId = null;
+    public string $stateDeadline = '';
 
     /** Livewire recibe el expediente de la ruta y prepara el formulario de hitos. */
     public function mount(Expedient $expedient): void
     {
         $this->expedient = $expedient;
+        $this->stateDeadline = $expedient->state_deadline?->format('Y-m-d\\TH:i') ?? '';
         abort_unless(Auth::user()->can('expedientes.ver'), 403);
     }
 
@@ -73,6 +75,25 @@ new #[Title('Detalle del Expediente')] class extends Component {
         Flux::toast(variant: 'success', text: __('Teléfono validado.'));
     }
 
+    public function saveDeadline(): void
+    {
+        abort_unless(Auth::user()->can('expedientes.actualizar'), 403);
+        abort_unless($this->expedient->mailAccount?->user_id === Auth::id(), 403);
+
+        $validated = $this->validate([
+            'stateDeadline' => ['nullable', 'date'],
+        ]);
+
+        $this->expedient->updateDeadline(
+            Auth::user(),
+            filled($validated['stateDeadline']) ? \Illuminate\Support\Carbon::parse($validated['stateDeadline']) : null,
+        );
+        $this->expedient->refresh();
+        $this->stateDeadline = $this->expedient->state_deadline?->format('Y-m-d\\TH:i') ?? '';
+
+        Flux::toast(variant: 'success', text: __('Vencimiento actualizado.'));
+    }
+
     public function confirmProvider(): void
     {
         abort_unless(Auth::user()->can('expedientes.actualizar'), 403);
@@ -124,6 +145,7 @@ new #[Title('Detalle del Expediente')] class extends Component {
             'replied_client' => __('Respuesta al cliente'),
             'replied_provider' => __('Respuesta al proveedor'),
             'phone_validated' => __('Teléfono validado'),
+            'deadline_updated' => __('Vencimiento actualizado'),
             'provider_confirmed' => __('Confirmación del proveedor'),
             'client_fingerprint_sent' => __('Huella enviada al cliente'),
             'closed' => __('Cierre'),
@@ -140,6 +162,7 @@ new #[Title('Detalle del Expediente')] class extends Component {
             'replied_client' => 'paper-airplane',
             'replied_provider' => 'paper-airplane',
             'phone_validated' => 'phone',
+            'deadline_updated' => 'calendar-days',
             'provider_confirmed' => 'check-circle',
             'client_fingerprint_sent' => 'document-check',
             'closed' => 'lock-closed',
@@ -156,6 +179,7 @@ new #[Title('Detalle del Expediente')] class extends Component {
             'replied_client' => 'green',
             'replied_provider' => 'amber',
             'phone_validated' => 'blue',
+            'deadline_updated' => 'amber',
             'provider_confirmed' => 'green',
             'client_fingerprint_sent' => 'green',
             'closed' => 'red',
@@ -244,6 +268,11 @@ new #[Title('Detalle del Expediente')] class extends Component {
                 <flux:text>{{ $expedient->opened_at?->format('d/m/Y H:i') ?? '—' }}</flux:text>
             </div>
 
+            <div>
+                <flux:text variant="subtle" size="sm">{{ __('Vencimiento del estado') }}</flux:text>
+                <flux:text>{{ $expedient->state_deadline?->format('d/m/Y H:i') ?? '—' }}</flux:text>
+            </div>
+
             @if ($expedient->closed_at)
                 <div>
                     <flux:text variant="subtle" size="sm">{{ __('Fecha de cierre') }}</flux:text>
@@ -274,6 +303,13 @@ new #[Title('Detalle del Expediente')] class extends Component {
                     </flux:button>
                 @endif
             </div>
+
+            @if ($expedient->status->value !== 'concluded')
+                <form wire:submit="saveDeadline" class="mt-4 flex flex-wrap items-end gap-2">
+                    <flux:input wire:model="stateDeadline" :label="__('Vencimiento del estado')" type="datetime-local" />
+                    <flux:button variant="ghost" type="submit" icon="calendar-days">{{ __('Actualizar vencimiento') }}</flux:button>
+                </form>
+            @endif
         </flux:card>
     @endcan
 
@@ -332,16 +368,18 @@ new #[Title('Detalle del Expediente')] class extends Component {
                                 wire:click="openComposer('reply_client', {{ $message->id }})"
                             >
                                 <flux:icon name="arrow-uturn-left" class="w-3 h-3" />
-                                {{ __('Responder') }}
+                                {{ $expedient->phone_validated_at ? __('Responder') : __('Solicitar teléfono') }}
                             </flux:button>
-                            <flux:button
-                                variant="ghost"
-                                size="xs"
-                                wire:click="openComposer('forward_provider', {{ $message->id }})"
-                            >
-                                <flux:icon name="arrow-turn-down-right" class="w-3 h-3" />
-                                {{ __('Reenviar') }}
-                            </flux:button>
+                            @if ($expedient->phone_validated_at)
+                                <flux:button
+                                    variant="ghost"
+                                    size="xs"
+                                    wire:click="openComposer('forward_provider', {{ $message->id }})"
+                                >
+                                    <flux:icon name="arrow-turn-down-right" class="w-3 h-3" />
+                                    {{ __('Reenviar') }}
+                                </flux:button>
+                            @endif
                         </div>
                     @endif
                 @endcan

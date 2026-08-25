@@ -5,6 +5,11 @@ use App\Models\MailAccount;
 use App\Models\Signature;
 use App\Models\Template;
 use App\Models\User;
+use App\Models\Expedient;
+use App\Models\MailMessage;
+use App\Enums\MailDirection;
+use App\Enums\MailMessageStatus;
+use App\Services\Bandeja\ImapExpedientBridgeService;
 use App\Services\Bandeja\InboxOutboundMailService;
 use App\Services\Bandeja\ImapMailboxService;
 use Flux\Flux;
@@ -54,6 +59,15 @@ new #[Title('Bandeja de entrada')] class extends Component {
     public string $composerContactSearch = '';
     public ?int $composerTemplateId = null;
     public ?int $composerSignatureId = null;
+    public bool $associationOpen = false;
+    public array $associationCandidateIds = [];
+    public ?int $associationMessageId = null;
+    public bool $createExpedientOpen = false;
+    public ?int $createExpedientMessageId = null;
+    public string $createExpedientNumber = '';
+    public string $createExpedientEmail = '';
+    public string $createExpedientPhone = '';
+    public string $createExpedientType = '';
 
     protected ?User $currentUser = null;
 
@@ -473,7 +487,14 @@ new #[Title('Bandeja de entrada')] class extends Component {
 
         $account = $this->resolveSelectedAccount();
         abort_if($account === null, 403);
-        abort_unless(collect($this->remoteFolders)->contains('path', $targetFolder), 403);
+        if (blank($targetFolder)) {
+            $this->addError('moveTargetFolder', __('Seleccioná una carpeta destino.'));
+
+            return;
+        }
+
+        $permittedFolders = $account->expedientStates()->whereNotNull('imap_folder')->pluck('imap_folder');
+        abort_unless($permittedFolders->contains($targetFolder), 403);
 
         $envelope = $this->findEnvelope($account, $messageId);
         abort_if($envelope === null, 404);
@@ -493,6 +514,130 @@ new #[Title('Bandeja de entrada')] class extends Component {
         } catch (\Throwable) {
             Flux::toast(variant: 'danger', text: __('No se pudo mover el mensaje en IMAP.'));
         }
+    }
+
+    #[Computed]
+    public function configuredMoveFolders()
+    {
+        $account = $this->resolveSelectedAccount();
+
+        return $account === null ? collect() : $account->expedientStates()
+            ->whereNotNull('imap_folder')
+            ->where('imap_folder', '!=', $this->selectedFolder)
+            ->orderBy('name')
+            ->get();
+    }
+
+    #[Computed]
+    public function associationCandidates()
+    {
+        return Expedient::query()->whereKey($this->associationCandidateIds)->orderBy('case_number')->get();
+    }
+
+    public function openAssociation(int $messageId, ImapExpedientBridgeService $bridge): void
+    {
+        abort_unless(Auth::user()->can('bandeja.clasificar'), 403);
+        $account = $this->resolveSelectedAccount();
+        abort_if($account === null, 403);
+        $envelope = $this->findEnvelope($account, $messageId);
+        abort_if($envelope === null || $envelope['folder'] !== 'INBOX', 404);
+
+        $this->associationMessageId = $messageId;
+        $this->associationCandidateIds = $bridge->candidates($account, $envelope)->pluck('expedient.id')->all();
+        $this->associationOpen = true;
+    }
+
+    public function openCreateExpedient(int $messageId): void
+    {
+        abort_unless(Auth::user()->can('expedientes.crear'), 403);
+        $account = $this->resolveSelectedAccount();
+        abort_if($account === null, 403);
+        $envelope = $this->findEnvelope($account, $messageId);
+        abort_if($envelope === null || $envelope['folder'] !== 'INBOX', 404);
+
+        $this->createExpedientMessageId = $messageId;
+        $this->createExpedientNumber = 'EXP-'.now()->format('YmdHis').'-'.$messageId;
+        $this->createExpedientEmail = $envelope['from_email'] ?? '';
+        $this->createExpedientPhone = '';
+        $this->createExpedientType = $envelope['subject'] ?? '';
+        $this->createExpedientOpen = true;
+    }
+
+    public function saveCreatedExpedient(ImapExpedientBridgeService $bridge): void
+    {
+        abort_unless(Auth::user()->can('expedientes.crear'), 403);
+        $account = $this->resolveSelectedAccount();
+        abort_if($account === null || $this->createExpedientMessageId === null, 403);
+        $envelope = $this->findEnvelope($account, $this->createExpedientMessageId);
+        abort_if($envelope === null || $envelope['folder'] !== 'INBOX', 404);
+
+        $validator = Validator::make([
+            'createExpedientNumber' => $this->createExpedientNumber,
+            'createExpedientEmail' => $this->createExpedientEmail,
+            'createExpedientPhone' => $this->createExpedientPhone,
+            'createExpedientType' => $this->createExpedientType,
+        ], [
+            'createExpedientNumber' => ['required', 'string', 'max:50', 'unique:cases,case_number'],
+            'createExpedientEmail' => ['nullable', 'email', 'max:255'],
+            'createExpedientPhone' => ['nullable', 'string', 'max:50'],
+            'createExpedientType' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        if ($validator->fails()) {
+            $this->setErrorBag($validator->errors());
+
+            return;
+        }
+
+        $validated = $validator->validated();
+
+        $expedient = Expedient::create([
+            'case_number' => $validated['createExpedientNumber'],
+            'sender_email' => $validated['createExpedientEmail'] ?: null,
+            'sender_phone' => $validated['createExpedientPhone'] ?: null,
+            'request_type' => $validated['createExpedientType'] ?: null,
+            'mail_account_id' => $account->id,
+            'assigned_user_id' => $this->getUser()->id,
+        ]);
+        $expedient->open($this->getUser());
+        $bridge->associate($account, $expedient, $this->getUser(), $envelope);
+        MailMessage::create([
+            'case_id' => $expedient->id,
+            'mail_account_id' => $account->id,
+            'message_id' => $envelope['message_id'],
+            'imap_uid' => (string) $envelope['uid'],
+            'folder' => $envelope['folder'],
+            'subject' => $envelope['subject'],
+            'from_email' => $envelope['from_email'],
+            'from_name' => $envelope['from_name'],
+            'received_at' => $envelope['received_at'],
+            'direction' => MailDirection::Incoming,
+            'status' => MailMessageStatus::Associated,
+            'in_reply_to' => $envelope['in_reply_to'] ?? null,
+            'references' => is_array($envelope['references'] ?? null)
+                ? $envelope['references']
+                : preg_split('/\s+/', (string) ($envelope['references'] ?? ''), -1, PREG_SPLIT_NO_EMPTY),
+        ]);
+
+        $this->createExpedientOpen = false;
+
+        $this->redirect(route('expedientes.show', $expedient), navigate: true);
+    }
+
+    public function confirmAssociation(array $expedientIds, ImapExpedientBridgeService $bridge): void
+    {
+        abort_unless(Auth::user()->can('bandeja.clasificar'), 403);
+        $account = $this->resolveSelectedAccount();
+        abort_if($account === null || $this->associationMessageId === null, 403);
+        $envelope = $this->findEnvelope($account, $this->associationMessageId);
+        abort_if($envelope === null || $envelope['folder'] !== 'INBOX', 404);
+
+        foreach (Expedient::query()->where('mail_account_id', $account->id)->whereKey($expedientIds)->get() as $expedient) {
+            $bridge->associate($account, $expedient, $this->getUser(), $envelope);
+        }
+
+        $this->associationOpen = false;
+        Flux::toast(variant: 'success', text: __('Asociaciones confirmadas.'));
     }
 
     /** Acción `wire:click` que mueve el mensaje seleccionado a la papelera. */
@@ -924,10 +1069,9 @@ new #[Title('Bandeja de entrada')] class extends Component {
                         @can('bandeja.sincronizar')
                             @if ($this->selectedMessage && $this->selectedMessage->imap_uid && $this->selectedMessage->folder)
                                 <flux:select wire:model.live="moveTargetFolder" size="sm" :aria-label="__('Mover mensaje a')">
-                                    @foreach ($remoteFolders as $folder)
-                                        @if ($folder['path'] !== $this->selectedMessage->folder)
-                                            <flux:select.option value="{{ $folder['path'] }}">{{ $folder['name'] }}</flux:select.option>
-                                        @endif
+                                    <flux:select.option value="">{{ __('Seleccionar estado...') }}</flux:select.option>
+                                    @foreach ($this->configuredMoveFolders as $state)
+                                        <flux:select.option value="{{ $state->imap_folder }}">{{ $state->name }}</flux:select.option>
                                     @endforeach
                                 </flux:select>
                                 <flux:button
@@ -947,6 +1091,14 @@ new #[Title('Bandeja de entrada')] class extends Component {
                                     {{ __('Papelera') }}
                                 </flux:button>
                                 @can('bandeja.clasificar')
+                                    @if ($this->selectedMessage->folder === 'INBOX')
+                                        <flux:button wire:click="openCreateExpedient({{ $this->selectedMessage->id }})" variant="ghost" size="sm" icon="plus">
+                                            {{ __('Crear expediente') }}
+                                        </flux:button>
+                                        <flux:button wire:click="openAssociation({{ $this->selectedMessage->id }})" variant="ghost" size="sm" icon="link">
+                                            {{ __('Asociar expediente') }}
+                                        </flux:button>
+                                    @endif
                                     <flux:button wire:click="openComposer('reply', {{ $this->selectedMessage->id }})" variant="ghost" size="sm" icon="arrow-uturn-left">
                                         {{ __('Responder') }}
                                     </flux:button>
@@ -1034,6 +1186,35 @@ new #[Title('Bandeja de entrada')] class extends Component {
                     <span wire:loading.remove wire:target="sendComposer">{{ __('Enviar') }}</span>
                     <span wire:loading wire:target="sendComposer">{{ __('Enviando...') }}</span>
                 </flux:button>
+            </div>
+        </form>
+    </flux:modal>
+
+    <flux:modal wire:model="associationOpen" class="w-full md:w-[34rem]">
+        <flux:heading size="lg">{{ __('Asociar expediente') }}</flux:heading>
+        <flux:text variant="subtle" class="mb-4">{{ __('Seleccioná explícitamente uno o más expedientes sugeridos.') }}</flux:text>
+        <div class="space-y-2">
+            @foreach ($this->associationCandidates as $candidate)
+                <flux:checkbox wire:model="associationCandidateIds" value="{{ $candidate->id }}" label="{{ $candidate->case_number }}" />
+            @endforeach
+        </div>
+        <div class="mt-4 flex justify-end gap-2">
+            <flux:button variant="ghost" wire:click="$set('associationOpen', false)">{{ __('Cancelar') }}</flux:button>
+            <flux:button variant="primary" wire:click="confirmAssociation({{ \Illuminate\Support\Js::from($associationCandidateIds) }})">{{ __('Confirmar') }}</flux:button>
+        </div>
+    </flux:modal>
+
+    <flux:modal wire:model="createExpedientOpen" class="w-full md:w-[34rem]">
+        <form wire:submit="saveCreatedExpedient" class="space-y-4">
+            <flux:heading size="lg">{{ __('Crear expediente desde el correo') }}</flux:heading>
+            <flux:text variant="subtle">{{ __('Revisá los datos antes de crear y confirmar la asociación con este correo de INBOX.') }}</flux:text>
+            <flux:input wire:model="createExpedientNumber" :label="__('Número de expediente')" />
+            <flux:input wire:model="createExpedientEmail" type="email" :label="__('Email del solicitante')" />
+            <flux:input wire:model="createExpedientPhone" :label="__('Teléfono del solicitante')" />
+            <flux:input wire:model="createExpedientType" :label="__('Tipo de solicitud')" />
+            <div class="flex justify-end gap-2">
+                <flux:button type="button" variant="ghost" wire:click="$set('createExpedientOpen', false)">{{ __('Cancelar') }}</flux:button>
+                <flux:button type="submit" variant="primary">{{ __('Crear y asociar') }}</flux:button>
             </div>
         </form>
     </flux:modal>

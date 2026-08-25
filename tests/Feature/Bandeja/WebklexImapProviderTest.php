@@ -69,3 +69,45 @@ it('converts an IMAP server error into the application runtime exception path', 
     expect(fn () => $provider->listEnvelopes($this->account, 'INBOX'))
         ->toThrow(RuntimeException::class, 'No se pudo sincronizar la carpeta IMAP.');
 });
+
+it('resolves an already existing folder to its canonical remote path', function () {
+    $client = Mockery::mock(Client::class);
+    $client->shouldReceive('createFolder')->once()->with('Cases/Review', false)
+        ->andThrow(new ImapServerErrorException('NO [ALREADYEXISTS] Mailbox already exists'));
+    $folder = Mockery::mock(Folder::class);
+    $folder->path = 'Cases/Review';
+    $client->shouldReceive('getFolderByPath')->once()->with('Cases/Review', false, true)
+        ->andReturn($folder);
+
+    $provider = new class($client) extends WebklexImapProvider
+    {
+        public function __construct(private readonly Client $client) {}
+
+        protected function withClient(MailAccount $account, callable $callback): mixed
+        {
+            return $callback($this->client);
+        }
+    };
+
+    expect($provider->createFolder($this->account, 'Cases/Review'))->toBe('Cases/Review');
+});
+
+it('propagates unrelated IMAP folder creation errors', function () {
+    $client = Mockery::mock(Client::class);
+    $client->shouldReceive('createFolder')->once()->with('Cases/Review', false)
+        ->andThrow(new ImapServerErrorException('NO [CANNOT] Permission denied'));
+    $client->shouldNotReceive('getFolderByPath');
+
+    $provider = new class($client) extends WebklexImapProvider
+    {
+        public function __construct(private readonly Client $client) {}
+
+        protected function withClient(MailAccount $account, callable $callback): mixed
+        {
+            return $callback($this->client);
+        }
+    };
+
+    expect(fn () => $provider->createFolder($this->account, 'Cases/Review'))
+        ->toThrow(ImapServerErrorException::class, '[CANNOT]');
+});

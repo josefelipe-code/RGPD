@@ -107,3 +107,48 @@ it('does not reach IMAP verification when SMTP fails first', function () {
 
     expect(MailAccount::count())->toBe(0);
 });
+
+it('validates and persists the optional deadline notification recipient', function () {
+    $this->actingAs($this->user);
+
+    $mock = Mockery::mock(MailAccountConfigService::class);
+    $mock->shouldReceive('verifySmtpConnection')->once();
+    $mock->shouldReceive('verifyImapConnection')->once();
+    $this->instance(MailAccountConfigService::class, $mock);
+
+    Livewire::test('pages::configuracion.mail-accounts')
+        ->set('label', 'Test Account')
+        ->set('email_address', 'test@example.com')
+        ->set('deadline_notification_email', 'alerts@example.com')
+        ->set('imap_host', 'imap.example.com')
+        ->set('imap_port', 993)
+        ->set('imap_encryption', 'ssl')
+        ->set('imap_username', 'test@example.com')
+        ->set('imap_password', 'secret')
+        ->set('smtp_host', 'smtp.example.com')
+        ->set('smtp_port', 587)
+        ->set('smtp_encryption', 'tls')
+        ->set('smtp_username', 'test@example.com')
+        ->set('smtp_password', 'secret')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    expect(MailAccount::firstOrFail()->deadline_notification_email)->toBe('alerts@example.com');
+});
+
+it('rejects an invalid deadline notification recipient', function () {
+    $this->actingAs($this->user);
+
+    Livewire::test('pages::configuracion.mail-accounts')
+        ->set('deadline_notification_email', 'not-an-email')
+        ->call('save')
+        ->assertHasErrors(['deadline_notification_email']);
+});
+
+it('keeps deadline notification email configuration but no state management UI', function () {
+    $this->actingAs($this->user)
+        ->get(route('configuracion.cuentas-correo.index'))
+        ->assertSee('Email para alertas de vencimiento')
+        ->assertDontSee('Configurar estado de expediente')
+        ->assertDontSee('Guardar estado');
+});

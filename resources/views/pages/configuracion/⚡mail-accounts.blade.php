@@ -18,6 +18,7 @@ new #[Title('Cuentas de correo')] class extends Component {
     public ?int $editingMailAccountId = null;
     public string $label = '';
     public string $email_address = '';
+    public string $deadline_notification_email = '';
     public string $imap_host = '';
     public int $imap_port = 993;
     public ?string $imap_encryption = 'ssl';
@@ -52,6 +53,7 @@ new #[Title('Cuentas de correo')] class extends Component {
         return [
             'label' => ['required', 'string', 'max:255'],
             'email_address' => ['required', 'email', 'max:255', Rule::unique('mail_accounts', 'email_address')->ignore($this->editingMailAccountId)],
+            'deadline_notification_email' => ['nullable', 'email', 'max:255'],
             'imap_host' => ['required', 'string', 'max:255'],
             'imap_port' => ['required', 'integer', 'min:1', 'max:65535'],
             'imap_encryption' => ['nullable', 'string', 'in:ssl,tls'],
@@ -106,6 +108,7 @@ new #[Title('Cuentas de correo')] class extends Component {
         $this->editingMailAccountId = $account->id;
         $this->label = $account->label;
         $this->email_address = $account->email_address;
+        $this->deadline_notification_email = $account->deadline_notification_email ?? '';
         $this->imap_host = $account->imap_host;
         $this->imap_port = $account->imap_port;
         $this->imap_encryption = $account->imap_encryption;
@@ -135,6 +138,7 @@ new #[Title('Cuentas de correo')] class extends Component {
         }
 
         $validated = $this->validate($rules);
+        $validated['deadline_notification_email'] = $validated['deadline_notification_email'] ?: null;
 
             // Verifica la conectividad SMTP antes de persistir.
         $this->verifySmtpConnection($validated);
@@ -271,6 +275,7 @@ new #[Title('Cuentas de correo')] class extends Component {
             'editingMailAccountId',
             'label',
             'email_address',
+            'deadline_notification_email',
             'imap_host',
             'imap_port',
             'imap_encryption',
@@ -389,7 +394,13 @@ new #[Title('Cuentas de correo')] class extends Component {
 
             <form wire:submit="save" class="space-y-5">
                 <flux:input wire:model="label" :label="__('Etiqueta')" type="text" required :placeholder="__('Ej: Trabajo, Personal')" />
-                <flux:input wire:model="email_address" :label="__('Email')" type="email" required />
+                 <flux:input wire:model="email_address" :label="__('Email')" type="email" required />
+                 <flux:input
+                     wire:model="deadline_notification_email"
+                     :label="__('Email para alertas de vencimiento')"
+                     type="email"
+                     :description="__('Dejalo vacío para no enviar alertas de esta cuenta.')"
+                 />
 
                 {{-- IMAP --}}
                 <div class="space-y-3">
@@ -448,4 +459,5 @@ new #[Title('Cuentas de correo')] class extends Component {
             </form>
         </div>
     </flux:modal>
+
 </section>

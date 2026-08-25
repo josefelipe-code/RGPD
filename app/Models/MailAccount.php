@@ -14,6 +14,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'user_id',
     'label',
     'email_address',
+    'deadline_notification_email',
     'imap_host',
     'imap_port',
     'imap_encryption',
@@ -33,6 +34,17 @@ class MailAccount extends Model
     /** @use HasFactory<MailAccountFactory> */
     use HasFactory;
 
+    protected static function booted(): void
+    {
+        static::created(function (MailAccount $account): void {
+            $account->expedientStates()->createMany([
+                ['name' => 'Pending client', 'key' => 'pending_client'],
+                ['name' => 'Pending provider', 'key' => 'pending_provider'],
+                ['name' => 'Concluded', 'key' => 'concluded', 'is_final' => true],
+            ]);
+        });
+    }
+
     /**
      * Get the attributes that should be cast.
      *
@@ -44,6 +56,7 @@ class MailAccount extends Model
             'imap_port' => 'integer',
             'smtp_port' => 'integer',
             'is_active' => 'boolean',
+            'deadline_notification_email' => 'string',
             'imap_password' => 'encrypted',
             'smtp_password' => 'encrypted',
             'imap_options' => 'encrypted:array',
@@ -83,6 +96,16 @@ class MailAccount extends Model
     public function cases(): HasMany
     {
         return $this->hasMany(Expedient::class);
+    }
+
+    public function expedientStates(): HasMany
+    {
+        return $this->hasMany(ExpedientState::class);
+    }
+
+    public function imapMessageReferences(): HasMany
+    {
+        return $this->hasMany(ImapMessageReference::class);
     }
 
     /**

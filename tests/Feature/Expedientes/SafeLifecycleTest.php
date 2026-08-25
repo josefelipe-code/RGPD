@@ -27,11 +27,13 @@ test('creation always starts pending client without a status input', function ()
         ->set('caseNumber', 'EXP-SAFE-CREATE')
         ->set('mailAccountId', $this->account->id)
         ->set('assignedUserId', $assignee->id)
+        ->set('stateDeadline', now()->addWeek()->format('Y-m-d\\TH:i'))
         ->call('save')
         ->assertHasNoErrors();
 
     $expedient = Expedient::query()->where('case_number', 'EXP-SAFE-CREATE')->firstOrFail();
-    expect($expedient->fresh()->status)->toBe(CaseStatus::PendingClient);
+    expect($expedient->fresh()->status)->toBe(CaseStatus::PendingClient)
+        ->and($expedient->fresh()->state_deadline)->not->toBeNull();
 });
 
 test('mass creation cannot choose an arbitrary lifecycle status', function () {
@@ -65,4 +67,25 @@ test('show page does not expose outbound actions for concluded expedients', func
         ->assertDontSee('Responder')
         ->assertDontSee('Reenviar')
         ->assertDontSee('Cambiar estado');
+});
+
+test('show page offers only a phone request reply until the client phone is validated', function () {
+    $expedient = Expedient::factory()->for($this->account)->create();
+    MailMessage::factory()->for($this->account)->create(['case_id' => $expedient->id]);
+
+    $this->actingAs($this->admin)
+        ->get(route('expedientes.show', $expedient))
+        ->assertSee('Solicitar teléfono')
+        ->assertDontSee('Reenviar');
+});
+
+test('show page offers client reply and provider forwarding after the phone is validated', function () {
+    $expedient = Expedient::factory()->for($this->account)->create();
+    $expedient->validatePhone($this->admin);
+    MailMessage::factory()->for($this->account)->create(['case_id' => $expedient->id]);
+
+    $this->actingAs($this->admin)
+        ->get(route('expedientes.show', $expedient))
+        ->assertSee('Responder')
+        ->assertSee('Reenviar');
 });

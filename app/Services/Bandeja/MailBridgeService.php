@@ -11,6 +11,7 @@ use App\Models\MailMessage;
 use App\Models\User;
 use App\Services\MailAccountConfigService;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 
@@ -31,7 +32,7 @@ class MailBridgeService
      * Send outbound mail and transition the expedient.
      *
      * @param  'reply_client'|'forward_provider'  $mode
-     * @param  array{to?: string, body: string, subject: string, cc?: array<int,string>, bcc?: array<int,string>, template_id?: int}  $payload
+     * @param  array{to?: string, body: string, subject: string, cc?: array<int,string>, bcc?: array<int,string>, state_deadline?: string|null, template_id?: int}  $payload
      */
     /** Envía y registra un correo desde el compositor del expediente. */
     public function send(
@@ -108,8 +109,16 @@ class MailBridgeService
             // Transition expedient and create milestone with mail_message_id link
             if ($mode === 'reply_client') {
                 $expedient->replyClient($outgoing, $actor);
+                $expedient->updateDeadline(
+                    $actor,
+                    filled($payload['state_deadline'] ?? null) ? Carbon::parse($payload['state_deadline']) : null,
+                );
             } else {
-                $expedient->forwardProvider($outgoing, $actor);
+                $expedient->forwardProvider(
+                    $outgoing,
+                    $actor,
+                    filled($payload['state_deadline'] ?? null) ? Carbon::parse($payload['state_deadline']) : null,
+                );
             }
 
             return $outgoing;

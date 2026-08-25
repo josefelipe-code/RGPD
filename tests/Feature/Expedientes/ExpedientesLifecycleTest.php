@@ -21,10 +21,10 @@ test('phone validation is recorded before provider outreach', function () {
     $expedient = Expedient::factory()->for($this->account)->create(['status' => CaseStatus::PendingClient]);
     $outgoing = MailMessage::factory()->for($this->account)->outgoing()->create(['case_id' => $expedient->id]);
 
-    expect(fn () => $expedient->forwardProvider($outgoing, $this->user))->toThrow(LogicException::class);
+    expect(fn () => $expedient->forwardProvider($outgoing, $this->user, now()->addWeek()))->toThrow(LogicException::class);
 
     $validated = $expedient->validatePhone($this->user);
-    $forwarded = $expedient->forwardProvider($outgoing, $this->user);
+    $forwarded = $expedient->forwardProvider($outgoing, $this->user, now()->addWeek());
 
     expect($expedient->fresh()->status)->toBe(CaseStatus::PendingProvider)
         ->and($expedient->fresh()->phone_validated_at)->not->toBeNull()
@@ -52,7 +52,7 @@ test('forbids lifecycle actions on concluded expedients', function () {
 
     expect(fn () => $expedient->validatePhone($this->user))->toThrow(LogicException::class)
         ->and(fn () => $expedient->replyClient($outgoing, $this->user))->toThrow(LogicException::class)
-        ->and(fn () => $expedient->forwardProvider($outgoing, $this->user))->toThrow(LogicException::class)
+        ->and(fn () => $expedient->forwardProvider($outgoing, $this->user, now()->addWeek()))->toThrow(LogicException::class)
         ->and(fn () => $expedient->confirmProvider($this->user))->toThrow(LogicException::class)
         ->and(fn () => $expedient->markClientFingerprintSent($this->user))->toThrow(LogicException::class);
 });

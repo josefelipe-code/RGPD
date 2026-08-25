@@ -335,6 +335,7 @@ test('show page mail section shows reply/forward buttons for incoming messages (
         'case_id' => $expedient->id,
         'direction' => MailDirection::Incoming,
     ]);
+    $expedient->forceFill(['phone_validated_at' => now()])->save();
 
     $this->actingAs($this->admin)
         ->get(route('expedientes.show', $expedient))

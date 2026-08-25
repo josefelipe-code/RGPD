@@ -28,6 +28,7 @@ new #[Title('Expedientes')] class extends Component {
     public ?int $mailAccountId = null;
     public ?int $assignedUserId = null;
     public ?string $requestType = '';
+    public string $stateDeadline = '';
 
     /** Livewire inicializa filtros y datos del formulario de expedientes. */
     public function mount(): void
@@ -44,9 +45,14 @@ new #[Title('Expedientes')] class extends Component {
             'caseNumber' => ['required', 'string', 'max:50', Rule::unique('cases', 'case_number')->ignore($this->editingExpedientId)],
             'senderEmail' => ['nullable', 'email', 'max:255'],
             'senderPhone' => ['nullable', 'string', 'max:50'],
-            'mailAccountId' => ['required', 'integer', 'exists:mail_accounts,id'],
+            'mailAccountId' => [
+                'required',
+                'integer',
+                Rule::exists('mail_accounts', 'id')->where('user_id', Auth::id())->where('is_active', true),
+            ],
             'assignedUserId' => ['required', 'integer', 'exists:users,id'],
             'requestType' => ['nullable', 'string', 'max:255'],
+            'stateDeadline' => ['nullable', 'date', 'after:now'],
         ];
     }
 
@@ -105,7 +111,14 @@ new #[Title('Expedientes')] class extends Component {
     /** Computed que lista cuentas activas disponibles para filtrar o asociar. */
     public function mailAccounts()
     {
-        return MailAccount::query()->where('is_active', true)->orderBy('label')->get();
+        return MailAccount::query()->active()->orderBy('label')->get();
+    }
+
+    #[Computed]
+    /** Computed que lista las cuentas propias disponibles para crear o editar. */
+    public function availableMailAccounts()
+    {
+        return Auth::user()->mailAccounts()->active()->orderBy('label')->get();
     }
 
     #[Computed]
@@ -147,7 +160,12 @@ new #[Title('Expedientes')] class extends Component {
 
         $this->authorizeAbility($isCreating ? 'expedientes.crear' : 'expedientes.actualizar');
 
-        $validated = $this->validate();
+        $rules = $this->rules();
+        if (! $isCreating) {
+            unset($rules['stateDeadline']);
+        }
+
+        $validated = $this->validate($rules);
 
         $expedient = $isCreating
             ? Expedient::create([
@@ -172,7 +190,10 @@ new #[Title('Expedientes')] class extends Component {
             });
 
         if ($isCreating) {
-            $expedient->open(Auth::user());
+            $expedient->open(
+                Auth::user(),
+                filled($validated['stateDeadline']) ? \Illuminate\Support\Carbon::parse($validated['stateDeadline']) : null,
+            );
         }
 
         $this->resetForm();
@@ -228,6 +249,7 @@ new #[Title('Expedientes')] class extends Component {
             'mailAccountId',
             'assignedUserId',
             'requestType',
+            'stateDeadline',
         ]);
 
         $this->resetErrorBag();
@@ -380,13 +402,16 @@ new #[Title('Expedientes')] class extends Component {
                 </flux:field>
 
                 <flux:input wire:model="senderEmail" :label="__('Email del solicitante')" type="email" />
-                <flux:input wire:model="senderPhone" :label="__('Teléfono del solicitante')" type="text" />
+                 <flux:input wire:model="senderPhone" :label="__('Teléfono del solicitante')" type="text" />
+                 @if (! $editingExpedientId)
+                     <flux:input wire:model="stateDeadline" :label="__('Vencimiento del estado')" type="datetime-local" />
+                 @endif
 
                 <flux:field>
                     <flux:label>{{ __('Cuenta de correo') }}</flux:label>
                     <flux:select wire:model="mailAccountId" required>
                         <flux:select.option value="">{{ __('Seleccionar cuenta...') }}</flux:select.option>
-                        @foreach ($this->mailAccounts as $account)
+                        @foreach ($this->availableMailAccounts as $account)
                             <flux:select.option value="{{ $account->id }}">{{ $account->label ?? $account->email_address }}</flux:select.option>
                         @endforeach
                     </flux:select>

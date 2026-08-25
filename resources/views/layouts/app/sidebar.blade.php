@@ -33,8 +33,12 @@
                         <div class="{{ $sidebarSectionHeadingTextClasses }}">{{ __('Expedientes') }}</div>
                     </div>
 
-                    <flux:sidebar.item icon="folder" :href="route('expedientes.index')" :current="request()->routeIs('expedientes.*')" wire:navigate>
+                    <flux:sidebar.item icon="folder" :href="route('expedientes.index')" :current="request()->routeIs('expedientes.index', 'expedientes.show')" wire:navigate>
                         {{ __('Expedientes') }}
+                    </flux:sidebar.item>
+
+                    <flux:sidebar.item icon="adjustments-horizontal" :href="route('expedientes.states.index')" :current="request()->routeIs('expedientes.states.*')" wire:navigate>
+                        {{ __('Estados') }}
                     </flux:sidebar.item>
                 @endcan
 

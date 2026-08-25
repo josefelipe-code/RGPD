@@ -13,6 +13,9 @@ interface ImapProvider
     /** Obtiene las carpetas remotas que consume la bandeja Livewire. */
     public function listFolders(MailAccount $account): Collection;
 
+    /** Creates a remote folder and returns its validated path. */
+    public function createFolder(MailAccount $account, string $path): string;
+
     /**
      * @return Collection<int, array<string, mixed>>
      */

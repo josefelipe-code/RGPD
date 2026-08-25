@@ -4,11 +4,13 @@ namespace App\Models;
 
 use App\Enums\CaseStatus;
 use App\Enums\MilestoneAction;
+use Carbon\CarbonInterface;
 use Database\Factories\ExpedientFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\DB;
@@ -49,6 +51,7 @@ class Expedient extends Model
             'phone_validated_at' => 'datetime',
             'opened_at' => 'datetime',
             'closed_at' => 'datetime',
+            'state_deadline' => 'datetime',
             'deleted_at' => 'datetime',
         ];
     }
@@ -59,6 +62,17 @@ class Expedient extends Model
     public function mailAccount(): BelongsTo
     {
         return $this->belongsTo(MailAccount::class);
+    }
+
+    public function state(): BelongsTo
+    {
+        return $this->belongsTo(ExpedientState::class, 'expedient_state_id');
+    }
+
+    public function imapMessageReferences(): BelongsToMany
+    {
+        return $this->belongsToMany(ImapMessageReference::class, 'expedient_imap_message', 'case_id', 'imap_message_reference_id')
+            ->withPivot(['confirmed_by', 'confirmed_at'])->withTimestamps();
     }
 
     /**
@@ -97,17 +111,19 @@ class Expedient extends Model
      * Abre el expediente, registra la fecha y crea el hito correspondiente.
      */
     /** Abre el expediente y registra la acción para la página de detalle. */
-    public function open(User $creator): void
+    public function open(User $creator, ?CarbonInterface $deadline = null): void
     {
         if ($this->opened_at !== null) {
             return;
         }
 
-        DB::transaction(function () use ($creator) {
+        DB::transaction(function () use ($creator, $deadline) {
             $this->forceFill([
                 'status' => CaseStatus::PendingClient,
+                'expedient_state_id' => $this->mailAccount->expedientStates()->where('key', 'pending_client')->value('id'),
                 'opened_at' => now(),
                 'closed_at' => null,
+                'state_deadline' => $deadline,
             ])->save();
             $this->milestones()->create([
                 'user_id' => $creator->id,
@@ -168,17 +184,48 @@ class Expedient extends Model
      * milestone linked to the outbound mail message.
      */
     /** Registra que el expediente recibió un envío dirigido al proveedor. */
-    public function forwardProvider(MailMessage $outgoing, User $actor): CaseMilestone
+    public function forwardProvider(MailMessage $outgoing, User $actor, ?CarbonInterface $deadline = null): CaseMilestone
     {
-        return DB::transaction(function () use ($outgoing, $actor) {
+        return DB::transaction(function () use ($outgoing, $actor, $deadline) {
             $this->assertCanForwardProvider();
             $this->assertOutgoingMessage($outgoing);
-            $this->forceFill(['status' => CaseStatus::PendingProvider])->save();
+            $this->forceFill([
+                'status' => CaseStatus::PendingProvider,
+                'expedient_state_id' => $this->mailAccount->expedientStates()->where('key', 'pending_provider')->value('id'),
+                'state_deadline' => $deadline,
+            ])->save();
 
             return $this->milestones()->create([
                 'user_id' => $actor->id,
                 'action' => MilestoneAction::RepliedProvider,
                 'mail_message_id' => $outgoing->id,
+                'notes' => $deadline === null
+                    ? __('Deadline cleared.')
+                    : __('Deadline set for :deadline.', ['deadline' => $deadline->format('Y-m-d H:i')]),
+            ]);
+        });
+    }
+
+    public function updateDeadline(User $actor, ?CarbonInterface $deadline): ?CaseMilestone
+    {
+        return DB::transaction(function () use ($actor, $deadline) {
+            if ($this->status === CaseStatus::Concluded) {
+                throw new LogicException('Concluded expedients cannot have an active deadline.');
+            }
+
+            if (($this->state_deadline === null && $deadline === null)
+                || ($this->state_deadline !== null && $deadline !== null && $this->state_deadline->equalTo($deadline))) {
+                return null;
+            }
+
+            $this->forceFill(['state_deadline' => $deadline])->save();
+
+            return $this->milestones()->create([
+                'user_id' => $actor->id,
+                'action' => MilestoneAction::DeadlineUpdated,
+                'notes' => $deadline === null
+                    ? __('Deadline cleared.')
+                    : __('Deadline set for :deadline.', ['deadline' => $deadline->format('Y-m-d H:i')]),
             ]);
         });
     }
@@ -203,7 +250,9 @@ class Expedient extends Model
             $this->assertStatus(CaseStatus::PendingProvider, 'Only provider-pending expedients can be concluded.');
             $this->forceFill([
                 'status' => CaseStatus::Concluded,
+                'expedient_state_id' => $this->mailAccount->expedientStates()->where('is_final', true)->value('id'),
                 'closed_at' => now(),
+                'state_deadline' => null,
             ])->save();
 
             return $this->milestones()->create([

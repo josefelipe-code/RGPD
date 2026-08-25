@@ -27,6 +27,7 @@ class ExpedientFactory extends Factory
             'mail_account_id' => MailAccount::factory(),
             'assigned_user_id' => User::factory(),
             'status' => CaseStatus::PendingClient,
+            'state_deadline' => now()->addDays(7),
             'request_type' => fake()->randomElement(['consulta', 'reclamo', 'solicitud', null]),
             'opened_at' => fake()->dateTimeBetween('-60 days', 'now'),
             'closed_at' => null,
@@ -41,6 +42,7 @@ class ExpedientFactory extends Factory
         return $this->state(fn (array $attributes) => [
             'status' => CaseStatus::Concluded,
             'closed_at' => fake()->dateTimeBetween('-10 days', 'now'),
+            'state_deadline' => null,
         ]);
     }
 

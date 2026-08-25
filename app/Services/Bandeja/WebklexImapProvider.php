@@ -7,6 +7,7 @@ use Carbon\CarbonInterface;
 use Illuminate\Support\Collection;
 use Webklex\PHPIMAP\Attribute;
 use Webklex\PHPIMAP\ClientManager;
+use Webklex\PHPIMAP\Exceptions\ImapServerErrorException;
 use Webklex\PHPIMAP\Message;
 
 class WebklexImapProvider implements ImapProvider
@@ -20,6 +21,27 @@ class WebklexImapProvider implements ImapProvider
                 'name' => $folder->name,
                 'delimiter' => $folder->delimiter,
             ])->values();
+        });
+    }
+
+    public function createFolder(MailAccount $account, string $path): string
+    {
+        return $this->withClient($account, function ($client) use ($path): string {
+            try {
+                $folder = $client->createFolder($path, false);
+            } catch (ImapServerErrorException $exception) {
+                if (! str_contains($exception->getMessage(), '[ALREADYEXISTS]')) {
+                    throw $exception;
+                }
+
+                $folder = $client->getFolderByPath($path, false, true);
+
+                if ($folder === null) {
+                    throw $exception;
+                }
+            }
+
+            return $folder->path;
         });
     }
 

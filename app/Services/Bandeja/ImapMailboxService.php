@@ -21,6 +21,11 @@ class ImapMailboxService
         return $this->provider->listFolders($account);
     }
 
+    public function createFolder(MailAccount $account, string $path): string
+    {
+        return $this->provider->createFolder($account, $path);
+    }
+
     /** Delega la lectura de sobres sin descargar cuerpos de mensajes. */
     public function listEnvelopes(MailAccount $account, string $folder): Collection
     {
