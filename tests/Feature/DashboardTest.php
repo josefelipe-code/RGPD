@@ -28,3 +28,22 @@ test('authenticated users see a collapsible application sidebar', function () {
         ->assertSee('Dashboard')
         ->assertSee('Repository');
 });
+
+test('authenticated users see the application shell as sibling sidebar, topbar, and main regions', function () {
+    $user = User::factory()->create();
+    $this->actingAs($user);
+
+    $this->get(route('dashboard'))
+        ->assertOk()
+        ->assertSeeInOrder([
+            'data-flux-sidebar',
+            'data-test="application-topbar"',
+            'data-flux-main',
+        ], false)
+        ->assertSee('data-test="topbar-clock"', false)
+        ->assertSee('data-test="topbar-appearance-switcher"', false)
+        ->assertSee('x-model="$flux.appearance"', false)
+        ->assertSee('data-test="topbar-user-menu"', false)
+        ->assertSee('data-test="logout-button"', false)
+        ->assertSee('method="POST"', false);
+});

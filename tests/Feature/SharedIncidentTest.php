@@ -14,6 +14,16 @@ test('the active application layout renders the shared incident bell', function 
         ->assertSee('shared-incidents-bell', false);
 });
 
+test('the application topbar renders the shared incident bell only once', function () {
+    $user = User::factory()->create();
+
+    $response = $this->actingAs($user)->get(route('dashboard'));
+
+    $response->assertOk();
+
+    expect(substr_count($response->getContent(), 'data-test="shared-incidents-bell"'))->toBe(1);
+});
+
 test('open incidents are visible to every authenticated user with their shared count and contextual navigation', function () {
     $expedient = Expedient::factory()->create(['case_number' => 'EXP-INCIDENT']);
     $incident = SharedIncident::factory()->for($expedient, 'expedient')->create();
