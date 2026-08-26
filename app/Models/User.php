@@ -59,6 +59,14 @@ class User extends Authenticatable
     }
 
     /**
+     * Get the shared incidents claimed by this user.
+     */
+    public function claimedIncidents(): HasMany
+    {
+        return $this->hasMany(SharedIncident::class, 'claimed_by_user_id');
+    }
+
+    /**
      * Get the user's initials
      */
     /** Calcula las iniciales que muestran los menús de usuario. */

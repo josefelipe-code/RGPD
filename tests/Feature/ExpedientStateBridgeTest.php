@@ -2,6 +2,7 @@
 
 use App\Models\Expedient;
 use App\Models\MailAccount;
+use App\Models\SharedIncident;
 use App\Models\User;
 use App\Services\Bandeja\ImapExpedientBridgeService;
 use App\Services\Bandeja\ImapMailboxService;
@@ -154,4 +155,26 @@ test('failed remote moves leave a reconciliation record and do not change the ex
     expect(fn () => (new ExpedientStateService($mailbox))->transition($expedient, $target, $owner))->toThrow(RuntimeException::class);
     expect($reference->fresh()->reconciliation_status)->toBe('failed')
         ->and($expedient->fresh()->expedient_state_id)->not->toBe($target->id);
+});
+
+test('failed remote moves emit one safe shared incident for retried reconciliation failures', function () {
+    $owner = User::factory()->create();
+    $account = MailAccount::factory()->for($owner)->create();
+    $expedient = Expedient::factory()->for($account)->create();
+    $target = $account->expedientStates()->create(['name' => 'Review', 'key' => 'review', 'imap_folder' => 'Cases']);
+    $reference = app(ImapExpedientBridgeService::class)->associate($account, $expedient, $owner, bridgeEnvelope());
+    $mailbox = Mockery::mock(ImapMailboxService::class);
+    $mailbox->shouldReceive('moveMessage')->twice()->andThrow(new RuntimeException('IMAP password at /private/mailbox'));
+    $service = new ExpedientStateService($mailbox);
+
+    expect(fn () => $service->transition($expedient, $target, $owner))->toThrow(RuntimeException::class, 'IMAP password at /private/mailbox');
+    expect(fn () => $service->transition($expedient, $target, $owner))->toThrow(RuntimeException::class, 'IMAP password at /private/mailbox');
+
+    $incident = SharedIncident::query()->sole();
+
+    expect($incident->title)->toBe('La sincronización del expediente requiere atención.')
+        ->and($incident->case_id)->toBe($expedient->id)
+        ->and($incident->getAttributes())->not->toHaveKey('error')
+        ->and($incident->getAttributes())->not->toHaveKey('body')
+        ->and($incident->getAttributes())->not->toHaveKey('path');
 });

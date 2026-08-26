@@ -7,6 +7,7 @@ use App\Enums\MilestoneAction;
 use App\Models\Expedient;
 use App\Models\ExpedientState;
 use App\Models\MailAccount;
+use App\Models\SharedIncident;
 use App\Models\User;
 use App\Services\Bandeja\ImapMailboxService;
 use Carbon\CarbonInterface;
@@ -109,6 +110,12 @@ class ExpedientStateService
                     ]);
                 } catch (\Throwable $exception) {
                     $reference->update(['reconciliation_status' => 'failed', 'reconciliation_error' => $exception->getMessage()]);
+
+                    try {
+                        SharedIncident::reportImapReconciliationFailure($expedient, $reference->id, $state->id);
+                    } catch (\Throwable $incidentException) {
+                        report($incidentException);
+                    }
 
                     throw $exception;
                 }
