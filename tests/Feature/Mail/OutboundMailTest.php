@@ -19,69 +19,70 @@ beforeEach(function () {
     ]);
 });
 
-it('can be instantiated with required parameters', function () {
+it('can be instantiated with the operational outbound parameters', function () {
     $mailable = new OutboundMail(
         account: $this->account,
         recipientEmail: 'recipient@example.com',
         mailSubject: 'Test Subject',
         mailBody: '<p>Body</p>',
+        messageId: '<message@example.com>',
     );
 
     expect($mailable->recipientEmail)->toBe('recipient@example.com')
         ->and($mailable->mailSubject)->toBe('Test Subject')
         ->and($mailable->mailBody)->toBe('<p>Body</p>')
-        ->and($mailable->mailSignature)->toBeNull();
+        ->and($mailable->messageId)->toBe('<message@example.com>')
+        ->and($mailable->signature)->toBeNull();
 });
 
-it('accepts cc and bcc arrays', function () {
+it('accepts cc, bcc, threading headers, and a signature', function () {
     $mailable = new OutboundMail(
         account: $this->account,
         recipientEmail: 'recipient@example.com',
         mailSubject: 'Test Subject',
         mailBody: '<p>Body</p>',
+        messageId: '<message@example.com>',
         ccAddresses: ['cc@example.com'],
         bccAddresses: ['bcc@example.com'],
-    );
-
-    expect($mailable->ccAddresses)->toBe(['cc@example.com'])
-        ->and($mailable->bccAddresses)->toBe(['bcc@example.com']);
-});
-
-it('generates Message-ID header via headers method', function () {
-    $mailable = new OutboundMail(
-        account: $this->account,
-        recipientEmail: 'recipient@example.com',
-        mailSubject: 'Test Subject',
-        mailBody: '<p>Body</p>',
+        inReplyTo: '<origin@example.com>',
+        references: ['<root@example.com>', '<origin@example.com>'],
+        signature: '<p>Signature</p>',
     );
 
     $headers = $mailable->headers();
 
-    expect($headers->messageId)->toContain('@');
+    expect($mailable->ccAddresses)->toBe(['cc@example.com'])
+        ->and($mailable->bccAddresses)->toBe(['bcc@example.com'])
+        ->and($headers->messageId)->toBe('<message@example.com>')
+        ->and($headers->references)->toBe(['<root@example.com>', '<origin@example.com>'])
+        ->and($headers->text)->toBe(['In-Reply-To' => '<origin@example.com>'])
+        ->and($mailable->content()->with)->toHaveKey('signature', '<p>Signature</p>');
 });
 
-it('implements ShouldQueue', function () {
+it('does not implement ShouldQueue because outbound delivery is synchronous', function () {
     $mailable = new OutboundMail(
         account: $this->account,
         recipientEmail: 'recipient@example.com',
         mailSubject: 'Test',
         mailBody: '<p>Body</p>',
+        messageId: '<message@example.com>',
     );
 
-    expect($mailable)->toBeInstanceOf(ShouldQueue::class);
+    expect($mailable)->not->toBeInstanceOf(ShouldQueue::class);
 });
 
-it('passes body and signature to view via content with', function () {
+it('uses the outbound html and text views', function () {
     $mailable = new OutboundMail(
         account: $this->account,
         recipientEmail: 'recipient@example.com',
         mailSubject: 'Test',
         mailBody: '<p>Hello</p>',
-        mailSignature: '<p>Signature</p>',
+        messageId: '<message@example.com>',
     );
 
     $content = $mailable->content();
 
-    expect($content->with)->toHaveKey('body', '<p>Hello</p>')
-        ->and($content->with)->toHaveKey('signature', '<p>Signature</p>');
+    expect($content->html)->toBe('mail.outbound')
+        ->and($content->text)->toBe('mail.outbound-text')
+        ->and($content->with)->toHaveKey('body', '<p>Hello</p>');
 });

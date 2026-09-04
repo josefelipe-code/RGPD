@@ -1,73 +1,102 @@
 <?php
 
-use App\Models\Contact;
-use App\Models\MailAccount;
-use App\Models\Signature;
-use App\Models\Template;
-use App\Models\User;
-use App\Models\Expedient;
-use App\Models\MailMessage;
 use App\Enums\MailDirection;
 use App\Enums\MailMessageStatus;
+use App\Models\Expedient;
+use App\Models\MailAccount;
+use App\Models\MailMessage;
+use App\Models\User;
 use App\Services\Bandeja\ImapExpedientBridgeService;
-use App\Services\Bandeja\InboxOutboundMailService;
 use App\Services\Bandeja\ImapMailboxService;
+use App\Services\Bandeja\ImapMessageOperationReservationService;
 use Flux\Flux;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Date;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\HtmlString;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\HtmlString;
 use Livewire\Attributes\Computed;
+use Livewire\Attributes\On;
 use Livewire\Attributes\Title;
 use Livewire\Attributes\Url;
 use Livewire\Component;
 use Livewire\WithPagination;
 
-new #[Title('Bandeja de entrada')] class extends Component {
+new #[Title('Bandeja de entrada')] class extends Component
+{
     use WithPagination;
 
     #[Url(as: 'account')]
     public ?int $selectedAccountId = null;
+
     public ?int $selectedMessageId = null;
+
     public string $statusFilter = 'all';
+
     public string $search = '';
+
     public int $perPage = 15;
+
     public string $selectedFolder = 'INBOX';
+
     public string $moveTargetFolder = '';
+
     /** @var array<int, array{path: string, name: string}> */
     public array $remoteFolders = [];
+
     public bool $foldersLoaded = false;
+
     public bool $folderLoadFailed = false;
+
     /** @var array<string, string> */
     public array $folderSyncErrors = [];
+
     /** @var array<int, array<string, mixed>> */
     public array $envelopes = [];
+
     public ?string $loadedBodyHtml = null;
+
     public ?string $loadedBodyText = null;
+
     public bool $bodyLoaded = false;
+
     public bool $bodyLoadFailed = false;
+
     public bool $composerOpen = false;
+
     public ?string $composerMode = null;
-    public string $composerTo = '';
-    public string $composerCc = '';
-    public string $composerBcc = '';
-    public string $composerSubject = '';
-    public string $composerBody = '';
-    public ?int $composerContactId = null;
-    public string $composerContactSearch = '';
-    public ?int $composerTemplateId = null;
-    public ?int $composerSignatureId = null;
+
+    public ?int $composerAccountId = null;
+
+    public ?string $composerFolder = null;
+
+    public ?int $composerImapUid = null;
+
+    /** @var array<string, mixed> */
+    public array $composerOriginData = [];
+
     public bool $associationOpen = false;
+
     public array $associationCandidateIds = [];
+
     public ?int $associationMessageId = null;
+
     public bool $createExpedientOpen = false;
+
     public ?int $createExpedientMessageId = null;
+
     public string $createExpedientNumber = '';
+
     public string $createExpedientEmail = '';
+
     public string $createExpedientPhone = '';
+
     public string $createExpedientType = '';
+
+    public ?string $operationReservationExpiresAt = null;
+
+    public ?string $operationReservationOperatorName = null;
 
     protected ?User $currentUser = null;
 
@@ -78,7 +107,7 @@ new #[Title('Bandeja de entrada')] class extends Component {
 
         // Validate query-string account: must be owned by user and active
         if ($this->selectedAccountId !== null) {
-            $valid = $this->getUser()->mailAccounts()
+            $valid = $this->getUser()->accessibleMailAccounts()
                 ->where('id', $this->selectedAccountId)
                 ->where('is_active', true)
                 ->exists();
@@ -135,18 +164,19 @@ new #[Title('Bandeja de entrada')] class extends Component {
         $this->resetPage();
     }
 
-    /** Restablece el compositor cuando el usuario cierra el modal desde Flux. */
-    public function updatedComposerOpen(bool $open): void
+    #[On('outbound-mail-sent')]
+    /** Refreshes the inbox after the shared composer completes an outbound send. */
+    public function refreshAfterOutboundMail(): void
     {
-        if (! $open) {
-            $this->resetComposer();
-        }
+        $this->refreshSelectedFolder();
+        $this->closeComposer();
     }
 
-    /** Completa el email manual con el contacto elegido en el selector. */
-    public function updatedComposerContactId(?int $contactId): void
+    #[On('outbound-mail-composer-closed')]
+    /** Clears the launcher state after the shared composer closes. */
+    public function clearOutboundComposer(): void
     {
-        $this->selectComposerContact($contactId);
+        $this->closeComposer();
     }
 
     /** Livewire limpia la selección y actualiza los sobres de la carpeta elegida. */
@@ -188,7 +218,7 @@ new #[Title('Bandeja de entrada')] class extends Component {
             if (! collect($this->remoteFolders)->contains('path', $this->selectedFolder)) {
                 $this->selectedFolder = collect($this->remoteFolders)->first()['path'] ?? 'INBOX';
             }
-        } catch (\Throwable) {
+        } catch (Throwable) {
             $this->foldersLoaded = false;
             $this->folderLoadFailed = true;
             Flux::toast(variant: 'danger', text: __('No se pudieron cargar las carpetas IMAP.'));
@@ -224,7 +254,7 @@ new #[Title('Bandeja de entrada')] class extends Component {
                 ->map(fn (array $envelope): array => $this->normalizeEnvelope($account->id, $this->selectedFolder, $envelope))
                 ->all();
             unset($this->folderSyncErrors[$this->selectedFolder]);
-        } catch (\Throwable) {
+        } catch (Throwable) {
             $this->folderSyncErrors[$this->selectedFolder] = __('No se pudo cargar esta carpeta IMAP.');
             Flux::toast(variant: 'danger', text: __('No se pudo cargar la carpeta IMAP seleccionada.'));
         }
@@ -247,7 +277,7 @@ new #[Title('Bandeja de entrada')] class extends Component {
             return null;
         }
 
-        return $this->getUser()->mailAccounts()
+        return $this->getUser()->accessibleMailAccounts()
             ->where('id', $this->selectedAccountId)
             ->where('is_active', true)
             ->first();
@@ -257,40 +287,7 @@ new #[Title('Bandeja de entrada')] class extends Component {
     /** Computed de cuentas activas que alimenta el selector de la plantilla. */
     public function activeAccounts()
     {
-        return $this->getUser()->mailAccounts()->where('is_active', true)->orderBy('label')->get();
-    }
-
-    #[Computed]
-    /** Computed que entrega los contactos con email para el compositor de la cuenta seleccionada. */
-    public function composerContacts()
-    {
-        return Contact::query()
-            ->whereNotNull('email')
-            ->when($this->composerContactSearch, fn ($query) => $query
-                ->where(fn ($query) => $query
-                    ->where('name', 'like', "%{$this->composerContactSearch}%")
-                    ->orWhere('email', 'like', "%{$this->composerContactSearch}%")))
-            ->orderBy('name')
-            ->limit(10)
-            ->get();
-    }
-
-    #[Computed]
-    /** Computed que lista las plantillas activas compartidas disponibles para el equipo. */
-    public function composerTemplates()
-    {
-        return Template::active()->orderBy('name')->get();
-    }
-
-    #[Computed]
-    /** Computed que limita las firmas activas a la cuenta seleccionada del usuario. */
-    public function composerSignatures()
-    {
-        $account = $this->resolveSelectedAccount();
-
-        return $account === null
-            ? collect()
-            : $account->signatures()->active()->orderByDesc('is_default')->orderBy('name')->get();
+        return $this->getUser()->accessibleMailAccounts()->where('is_active', true)->orderBy('label')->get();
     }
 
     #[Computed]
@@ -299,7 +296,7 @@ new #[Title('Bandeja de entrada')] class extends Component {
     {
         $account = $this->resolveSelectedAccount();
         if ($account === null) {
-            return new \Illuminate\Pagination\LengthAwarePaginator([], 0, $this->perPage);
+            return new LengthAwarePaginator([], 0, $this->perPage);
         }
 
         $search = mb_strtolower($this->search);
@@ -416,7 +413,7 @@ new #[Title('Bandeja de entrada')] class extends Component {
             $this->loadedBodyHtml = $content['html'];
             $this->loadedBodyText = $content['text'];
             $this->bodyLoaded = true;
-        } catch (\Throwable) {
+        } catch (Throwable) {
             $this->loadedBodyHtml = null;
             $this->loadedBodyText = null;
             $this->bodyLoadFailed = true;
@@ -430,7 +427,7 @@ new #[Title('Bandeja de entrada')] class extends Component {
     /** Actualiza Seen después de mostrar el cuerpo, sin bloquear la selección ni su lectura. */
     public function markMessageRead(int $accountId, string $folder, int $uid): void
     {
-        $account = $this->getUser()->mailAccounts()
+        $account = $this->getUser()->accessibleMailAccounts()
             ->whereKey($accountId)
             ->where('is_active', true)
             ->first();
@@ -448,7 +445,7 @@ new #[Title('Bandeja de entrada')] class extends Component {
                     text: __('No se pudo actualizar el estado de lectura en IMAP.'),
                 );
             }
-        } catch (\Throwable) {
+        } catch (Throwable) {
             Flux::toast(
                 variant: 'danger',
                 text: __('No se pudo actualizar el estado de lectura en IMAP.'),
@@ -461,7 +458,7 @@ new #[Title('Bandeja de entrada')] class extends Component {
     {
         abort_unless(Auth::user()->can('bandeja.sincronizar'), 403);
 
-        $account = MailAccount::where('user_id', $this->getUser()->id)
+        $account = $this->getUser()->accessibleMailAccounts()
             ->where('id', $this->selectedAccountId)
             ->where('is_active', true)
             ->firstOrFail();
@@ -472,7 +469,7 @@ new #[Title('Bandeja de entrada')] class extends Component {
                 variant: 'success',
                 text: __(':count mensajes cargados desde IMAP.', ['count' => count($this->envelopes)]),
             );
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             Flux::toast(
                 variant: 'danger',
                 text: $e->getMessage(),
@@ -511,7 +508,7 @@ new #[Title('Bandeja de entrada')] class extends Component {
 
             $this->clearSelectedMessage($messageId);
             Flux::toast(variant: 'success', text: __('Mensaje movido a :folder.', ['folder' => $targetFolder]));
-        } catch (\Throwable) {
+        } catch (Throwable) {
             Flux::toast(variant: 'danger', text: __('No se pudo mover el mensaje en IMAP.'));
         }
     }
@@ -534,26 +531,32 @@ new #[Title('Bandeja de entrada')] class extends Component {
         return Expedient::query()->whereKey($this->associationCandidateIds)->orderBy('case_number')->get();
     }
 
-    public function openAssociation(int $messageId, ImapExpedientBridgeService $bridge): void
+    public function openAssociation(int $messageId, ImapExpedientBridgeService $bridge, ImapMessageOperationReservationService $reservationService): void
     {
         abort_unless(Auth::user()->can('bandeja.clasificar'), 403);
         $account = $this->resolveSelectedAccount();
         abort_if($account === null, 403);
         $envelope = $this->findEnvelope($account, $messageId);
         abort_if($envelope === null || $envelope['folder'] !== 'INBOX', 404);
+        if (! $this->acquireOperationReservation($reservationService, $account, $envelope)) {
+            return;
+        }
 
         $this->associationMessageId = $messageId;
         $this->associationCandidateIds = $bridge->candidates($account, $envelope)->pluck('expedient.id')->all();
         $this->associationOpen = true;
     }
 
-    public function openCreateExpedient(int $messageId): void
+    public function openCreateExpedient(int $messageId, ImapMessageOperationReservationService $reservationService): void
     {
         abort_unless(Auth::user()->can('expedientes.crear'), 403);
         $account = $this->resolveSelectedAccount();
         abort_if($account === null, 403);
         $envelope = $this->findEnvelope($account, $messageId);
         abort_if($envelope === null || $envelope['folder'] !== 'INBOX', 404);
+        if (! $this->acquireOperationReservation($reservationService, $account, $envelope)) {
+            return;
+        }
 
         $this->createExpedientMessageId = $messageId;
         $this->createExpedientNumber = 'EXP-'.now()->format('YmdHis').'-'.$messageId;
@@ -563,13 +566,14 @@ new #[Title('Bandeja de entrada')] class extends Component {
         $this->createExpedientOpen = true;
     }
 
-    public function saveCreatedExpedient(ImapExpedientBridgeService $bridge): void
+    public function saveCreatedExpedient(ImapExpedientBridgeService $bridge, ImapMessageOperationReservationService $reservationService): void
     {
         abort_unless(Auth::user()->can('expedientes.crear'), 403);
         $account = $this->resolveSelectedAccount();
         abort_if($account === null || $this->createExpedientMessageId === null, 403);
         $envelope = $this->findEnvelope($account, $this->createExpedientMessageId);
         abort_if($envelope === null || $envelope['folder'] !== 'INBOX', 404);
+        $reservationService->assertHeldBy($account, $this->getUser(), $envelope['folder'], (int) $envelope['uid']);
 
         $validator = Validator::make([
             'createExpedientNumber' => $this->createExpedientNumber,
@@ -661,12 +665,12 @@ new #[Title('Bandeja de entrada')] class extends Component {
             $this->removeEnvelope($messageId);
             $this->clearSelectedMessage($messageId);
             Flux::toast(variant: 'success', text: __('Mensaje movido a la papelera.'));
-        } catch (\Throwable) {
+        } catch (Throwable) {
             Flux::toast(variant: 'danger', text: __('No se pudo mover el mensaje a la papelera.'));
         }
     }
 
-    /** Opens the mailbox-scoped composer for the selected IMAP envelope. */
+    /** Opens the shared composer for the selected transient IMAP envelope. */
     public function openComposer(string $mode, int $messageId): void
     {
         abort_unless(Auth::user()->can('bandeja.clasificar'), 403);
@@ -678,129 +682,51 @@ new #[Title('Bandeja de entrada')] class extends Component {
         abort_if($envelope === null, 404);
 
         $this->selectedMessageId = $messageId;
-        $this->resetComposer();
+        $this->composerAccountId = $account->id;
+        $this->composerFolder = $envelope['folder'];
+        $this->composerImapUid = (int) $envelope['uid'];
         $this->composerMode = $mode;
-        $this->composerTo = $mode === 'reply' ? $envelope['from_email'] : '';
-        $this->composerSubject = ($mode === 'reply' ? 'Re: ' : 'Fwd: ').($envelope['subject'] ?? '');
-        $this->composerSignatureId = $account->signatures()->active()->default()->value('id');
+        $this->composerOriginData = [
+            'message_id' => $envelope['message_id'] ?? null,
+            'references' => $envelope['references'] ?? null,
+            'subject' => $envelope['subject'] ?? null,
+            'from_email' => $envelope['from_email'] ?? null,
+            'from_name' => $envelope['from_name'] ?? null,
+        ];
         $this->composerOpen = true;
     }
 
-    /** Asigna al destinatario el email de un contacto existente con dirección válida. */
-    public function selectComposerContact(?int $contactId): void
-    {
-        if ($contactId === null) {
-            return;
-        }
-
-        $contact = Contact::query()->whereNotNull('email')->findOrFail($contactId);
-
-        $this->composerContactId = $contact->id;
-        $this->composerTo = $contact->email;
-        $this->resetErrorBag('composerTo');
-    }
-
-    /** Aplica una plantilla sólo mediante la acción explícita del usuario. */
-    public function applyComposerTemplate(): void
-    {
-        if ($this->composerTemplateId === null) {
-            return;
-        }
-
-        $template = Template::active()->findOrFail($this->composerTemplateId);
-
-        $this->composerBody = $template->body ?? '';
-
-        if (blank($this->composerSubject) && filled($template->subject)) {
-            $this->composerSubject = $template->subject;
-        }
-
-        $this->resetErrorBag(['composerBody', 'composerSubject']);
-    }
-
-    /** Validates and sends a reply or forward for the selected IMAP envelope. */
-    public function sendComposer(InboxOutboundMailService $outbound): void
-    {
-        abort_unless(Auth::user()->can('bandeja.clasificar'), 403);
-        abort_unless(in_array($this->composerMode, ['reply', 'forward'], true), 422);
-
-        $validator = Validator::make([
-            'composerTo' => $this->composerTo,
-            'composerCc' => $this->recipientList($this->composerCc),
-            'composerBcc' => $this->recipientList($this->composerBcc),
-            'composerSubject' => $this->composerSubject,
-            'composerBody' => $this->composerBody,
-        ], [
-            'composerTo' => ['required', 'email'],
-            'composerCc' => ['array'],
-            'composerCc.*' => ['email'],
-            'composerBcc' => ['array'],
-            'composerBcc.*' => ['email'],
-            'composerSubject' => ['required', 'string', 'max:255'],
-            'composerBody' => ['required', 'string'],
-        ]);
-
-        $validator->after(function ($validator): void {
-            foreach (['composerCc', 'composerBcc'] as $field) {
-                if ($validator->errors()->has("{$field}.*")) {
-                    $validator->errors()->add($field, __('Ingresá direcciones de correo válidas separadas por comas.'));
-                }
-            }
-        });
-
-        if ($validator->fails()) {
-            $this->setErrorBag($validator->errors());
-
-            return;
-        }
-
-        $validated = $validator->validated();
-        $account = $this->resolveSelectedAccount();
-        abort_if($account === null || $this->selectedMessageId === null, 403);
-        $envelope = $this->findEnvelope($account, $this->selectedMessageId);
-        abort_if($envelope === null, 404);
-        $signature = $this->resolveComposerSignature($account);
-
-        try {
-            $outbound->send(
-                account: $account,
-                mode: $this->composerMode,
-                recipient: $validated['composerTo'],
-                cc: $validated['composerCc'],
-                bcc: $validated['composerBcc'],
-                subject: $validated['composerSubject'],
-                body: $validated['composerBody'],
-                signature: $signature?->body,
-                origin: [
-                    'message_id' => $envelope['message_id'],
-                    'references' => $envelope['references'] ?? null,
-                ],
-            );
-        } catch (\Throwable $e) {
-            Log::withContext([
-                'mail_account_id' => $account->id,
-                'mode' => $this->composerMode,
-                'recipient_domain' => str($validated['composerTo'])->afterLast('@')->toString(),
-                'recipient_count' => 1 + count($validated['composerCc']) + count($validated['composerBcc']),
-            ]);
-
-            report($e);
-
-            Flux::toast(variant: 'danger', text: __('No se pudo enviar el correo. Verificá la configuración SMTP e intentá nuevamente.'));
-
-            return;
-        }
-
-        Flux::toast(variant: 'success', text: $this->composerMode === 'reply' ? __('Respuesta enviada.') : __('Reenvío enviado.'));
-        $this->composerOpen = false;
-        $this->resetComposer();
-    }
-
-    /** Cierra el compositor y descarta los datos transitorios no enviados. */
+    /** Clears the shared composer launcher state. */
     public function closeComposer(): void
     {
         $this->composerOpen = false;
-        $this->resetComposer();
+        $this->reset([
+            'composerMode',
+            'composerAccountId',
+            'composerFolder',
+            'composerImapUid',
+            'composerOriginData',
+        ]);
+        $this->resetErrorBag();
+    }
+
+    /** Discards all transient forms after their fixed reservation expires. */
+    public function expireOperationForm(): void
+    {
+        $this->closeComposer();
+        $this->associationOpen = false;
+        $this->createExpedientOpen = false;
+        $this->reset([
+            'associationCandidateIds',
+            'associationMessageId',
+            'createExpedientMessageId',
+            'createExpedientNumber',
+            'createExpedientEmail',
+            'createExpedientPhone',
+            'createExpedientType',
+            'operationReservationExpiresAt',
+            'operationReservationOperatorName',
+        ]);
     }
 
     /** Acción `wire:click` que limita la lista a todos o no leídos. */
@@ -835,43 +761,25 @@ new #[Title('Bandeja de entrada')] class extends Component {
             && (int) $envelope['uid'] === $uid);
     }
 
-    /** Resuelve exclusivamente una firma activa de la cuenta que realizará el envío. */
-    private function resolveComposerSignature(MailAccount $account): ?Signature
+    /**
+     * Acquire the fixed reservation used by the currently opened message operation.
+     *
+     * @param  array<string, mixed>  $envelope
+     */
+    private function acquireOperationReservation(ImapMessageOperationReservationService $reservationService, MailAccount $account, array $envelope): bool
     {
-        if ($this->composerSignatureId === null) {
-            return null;
+        try {
+            $reservation = $reservationService->acquire($account, $this->getUser(), $envelope['folder'], (int) $envelope['uid']);
+        } catch (AuthorizationException $exception) {
+            Flux::toast(variant: 'danger', text: __($exception->getMessage()));
+
+            return false;
         }
 
-        return $account->signatures()
-            ->active()
-            ->findOrFail($this->composerSignatureId);
-    }
+        $this->operationReservationExpiresAt = $reservation->expires_at->toIso8601String();
+        $this->operationReservationOperatorName = $reservation->operator()->value('name') ?? $this->getUser()->name;
 
-    /** Limpia los valores efímeros del compositor y sus errores de validación. */
-    private function resetComposer(): void
-    {
-        $this->reset([
-            'composerMode',
-            'composerTo',
-            'composerCc',
-            'composerBcc',
-            'composerSubject',
-            'composerBody',
-            'composerContactId',
-            'composerContactSearch',
-            'composerTemplateId',
-            'composerSignatureId',
-        ]);
-        $this->resetErrorBag();
-    }
-
-    /** Separa una lista de destinatarios introducida con comas y elimina valores vacíos. */
-    private function recipientList(string $recipients): array
-    {
-        return array_values(array_filter(array_map(
-            fn (string $recipient): string => trim($recipient),
-            explode(',', $recipients),
-        )));
+        return true;
     }
 
     /** Actualiza en memoria el estado de lectura tras confirmarlo en IMAP. */
@@ -1116,97 +1024,43 @@ new #[Title('Bandeja de entrada')] class extends Component {
         @endif
     </x-slot:reader>
 
-    <flux:modal wire:model.self="composerOpen" class="h-[min(90vh,56rem)] w-[min(96vw,72rem)] min-w-[20rem] max-w-[96vw] resize overflow-auto">
-        <form wire:submit="sendComposer" class="flex h-full min-h-[30rem] flex-col gap-4">
-            <flux:heading size="lg">{{ $composerMode === 'reply' ? __('Responder') : __('Reenviar') }}</flux:heading>
-            <flux:field>
-                <flux:label>{{ __('Contacto') }}</flux:label>
-                <flux:input wire:model.live.debounce.300ms="composerContactSearch" :placeholder="__('Buscar por nombre o email...')" />
-                <flux:select wire:model.live="composerContactId">
-                    <flux:select.option value="">{{ __('Ingresar email manualmente') }}</flux:select.option>
-                    @foreach ($this->composerContacts as $contact)
-                        <flux:select.option wire:key="composer-contact-{{ $contact->id }}" value="{{ $contact->id }}">{{ $contact->name }} ({{ $contact->email }})</flux:select.option>
-                    @endforeach
-                </flux:select>
-            </flux:field>
-            <flux:field>
-                <flux:label>{{ __('Para') }}</flux:label>
-                <flux:input wire:model="composerTo" type="email" :placeholder="__('correo@ejemplo.com')" />
-                <flux:error name="composerTo" />
-            </flux:field>
-            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <flux:field>
-                    <flux:label>{{ __('CC') }}</flux:label>
-                    <flux:input wire:model="composerCc" type="text" :placeholder="__('correo@ejemplo.com, otro@ejemplo.com')" />
-                    <flux:error name="composerCc" />
-                </flux:field>
-                <flux:field>
-                    <flux:label>{{ __('CCO') }}</flux:label>
-                    <flux:input wire:model="composerBcc" type="text" :placeholder="__('correo@ejemplo.com, otro@ejemplo.com')" />
-                    <flux:error name="composerBcc" />
-                </flux:field>
-            </div>
-            <flux:field>
-                <flux:label>{{ __('Plantilla') }}</flux:label>
-                <div class="flex gap-2">
-                    <flux:select wire:model="composerTemplateId" class="min-w-0 flex-1">
-                        <flux:select.option value="">{{ __('Sin plantilla') }}</flux:select.option>
-                        @foreach ($this->composerTemplates as $template)
-                            <flux:select.option wire:key="composer-template-{{ $template->id }}" value="{{ $template->id }}">{{ $template->name }}</flux:select.option>
-                        @endforeach
-                    </flux:select>
-                    <flux:button type="button" wire:click="applyComposerTemplate" wire:target="applyComposerTemplate" :disabled="$composerTemplateId === null" variant="ghost">
-                        {{ __('Aplicar') }}
-                    </flux:button>
-                </div>
-                <flux:text size="sm" variant="subtle">{{ __('Aplicar reemplaza el cuerpo sólo cuando lo confirmás.') }}</flux:text>
-            </flux:field>
-            <flux:field>
-                <flux:label>{{ __('Asunto') }}</flux:label>
-                <flux:input wire:model="composerSubject" />
-                <flux:error name="composerSubject" />
-            </flux:field>
-            <flux:field>
-                <flux:label>{{ __('Mensaje') }}</flux:label>
-                <flux:textarea wire:model="composerBody" rows="12" resize="both" class="min-h-48 flex-1" />
-                <flux:error name="composerBody" />
-            </flux:field>
-            <flux:field>
-                <flux:label>{{ __('Firma') }}</flux:label>
-                <flux:select wire:model="composerSignatureId">
-                    <flux:select.option value="">{{ __('Sin firma') }}</flux:select.option>
-                    @foreach ($this->composerSignatures as $signature)
-                        <flux:select.option wire:key="composer-signature-{{ $signature->id }}" value="{{ $signature->id }}">{{ $signature->name }}{{ $signature->is_default ? ' ('.__('predeterminada').')' : '' }}</flux:select.option>
-                    @endforeach
-                </flux:select>
-            </flux:field>
-            <div class="mt-auto flex justify-end gap-2">
-                <flux:button type="button" wire:click="closeComposer" variant="ghost">{{ __('Cancelar') }}</flux:button>
-                <flux:button type="submit" wire:loading.attr="disabled" wire:target="sendComposer" variant="primary" icon="paper-airplane">
-                    <span wire:loading.remove wire:target="sendComposer">{{ __('Enviar') }}</span>
-                    <span wire:loading wire:target="sendComposer">{{ __('Enviando...') }}</span>
-                </flux:button>
-            </div>
-        </form>
-    </flux:modal>
+    @if ($composerOpen && $composerAccountId !== null && $composerFolder !== null && $composerImapUid !== null && $composerMode !== null)
+        @livewire('pages::bandeja.mail-composer', [
+            'accountId' => $composerAccountId,
+            'folder' => $composerFolder,
+            'imapUid' => $composerImapUid,
+            'mode' => $composerMode,
+            'originData' => $composerOriginData,
+        ], key('outbound-mail-composer-'.$composerAccountId.'-'.$composerFolder.'-'.$composerImapUid.'-'.$composerMode))
+    @endif
 
     <flux:modal wire:model="associationOpen" class="w-full md:w-[34rem]">
-        <flux:heading size="lg">{{ __('Asociar expediente') }}</flux:heading>
-        <flux:text variant="subtle" class="mb-4">{{ __('Seleccioná explícitamente uno o más expedientes sugeridos.') }}</flux:text>
-        <div class="space-y-2">
-            @foreach ($this->associationCandidates as $candidate)
-                <flux:checkbox wire:model="associationCandidateIds" value="{{ $candidate->id }}" label="{{ $candidate->case_number }}" />
-            @endforeach
-        </div>
-        <div class="mt-4 flex justify-end gap-2">
-            <flux:button variant="ghost" wire:click="$set('associationOpen', false)">{{ __('Cancelar') }}</flux:button>
-            <flux:button variant="primary" wire:click="confirmAssociation({{ \Illuminate\Support\Js::from($associationCandidateIds) }})">{{ __('Confirmar') }}</flux:button>
+        <div
+            x-data="{ expiresAt: Date.parse(@js($operationReservationExpiresAt)), remaining: 0, expired: false, interval: null, update() { this.remaining = Math.max(0, Math.ceil((this.expiresAt - Date.now()) / 1000)); if (this.remaining === 0 && ! this.expired) { this.expired = true; clearInterval(this.interval); $wire.expireOperationForm(); } }, init() { this.update(); this.interval = setInterval(() => this.update(), 1000); }, destroy() { clearInterval(this.interval); } }"
+        >
+            <flux:heading size="lg">{{ __('Asociar expediente') }}</flux:heading>
+            <flux:text variant="subtle" size="sm">{{ __('Gestionado por') }} {{ $operationReservationOperatorName }} · {{ __('Tiempo restante') }}: <span x-text="remaining"></span>s</flux:text>
+            <flux:text variant="subtle" class="mb-4">{{ __('Seleccioná explícitamente uno o más expedientes sugeridos.') }}</flux:text>
+            <div class="space-y-2">
+                @foreach ($this->associationCandidates as $candidate)
+                    <flux:checkbox wire:model="associationCandidateIds" value="{{ $candidate->id }}" label="{{ $candidate->case_number }}" />
+                @endforeach
+            </div>
+            <div class="mt-4 flex justify-end gap-2">
+                <flux:button variant="ghost" wire:click="$set('associationOpen', false)">{{ __('Cancelar') }}</flux:button>
+                <flux:button variant="primary" x-bind:disabled="expired" wire:click="confirmAssociation({{ \Illuminate\Support\Js::from($associationCandidateIds) }})">{{ __('Confirmar') }}</flux:button>
+            </div>
         </div>
     </flux:modal>
 
     <flux:modal wire:model="createExpedientOpen" class="w-full md:w-[34rem]">
-        <form wire:submit="saveCreatedExpedient" class="space-y-4">
+        <form
+            wire:submit="saveCreatedExpedient"
+            class="space-y-4"
+            x-data="{ expiresAt: Date.parse(@js($operationReservationExpiresAt)), remaining: 0, expired: false, interval: null, update() { this.remaining = Math.max(0, Math.ceil((this.expiresAt - Date.now()) / 1000)); if (this.remaining === 0 && ! this.expired) { this.expired = true; clearInterval(this.interval); $wire.expireOperationForm(); } }, init() { this.update(); this.interval = setInterval(() => this.update(), 1000); }, destroy() { clearInterval(this.interval); } }"
+        >
             <flux:heading size="lg">{{ __('Crear expediente desde el correo') }}</flux:heading>
+            <flux:text variant="subtle" size="sm">{{ __('Gestionado por') }} {{ $operationReservationOperatorName }} · {{ __('Tiempo restante') }}: <span x-text="remaining"></span>s</flux:text>
             <flux:text variant="subtle">{{ __('Revisá los datos antes de crear y confirmar la asociación con este correo de INBOX.') }}</flux:text>
             <flux:input wire:model="createExpedientNumber" :label="__('Número de expediente')" />
             <flux:input wire:model="createExpedientEmail" type="email" :label="__('Email del solicitante')" />
@@ -1214,7 +1068,7 @@ new #[Title('Bandeja de entrada')] class extends Component {
             <flux:input wire:model="createExpedientType" :label="__('Tipo de solicitud')" />
             <div class="flex justify-end gap-2">
                 <flux:button type="button" variant="ghost" wire:click="$set('createExpedientOpen', false)">{{ __('Cancelar') }}</flux:button>
-                <flux:button type="submit" variant="primary">{{ __('Crear y asociar') }}</flux:button>
+                <flux:button type="submit" x-bind:disabled="expired" variant="primary">{{ __('Crear y asociar') }}</flux:button>
             </div>
         </form>
     </flux:modal>

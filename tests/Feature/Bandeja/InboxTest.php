@@ -2,21 +2,13 @@
 
 use App\Enums\MailDirection;
 use App\Enums\MailMessageStatus;
-use App\Mail\ImapOutboundMail;
-use App\Models\Contact;
 use App\Models\Expedient;
 use App\Models\MailAccount;
 use App\Models\MailMessage;
-use App\Models\Signature;
-use App\Models\Template;
 use App\Models\User;
 use App\Services\Bandeja\ImapMailboxService;
-use App\Services\Bandeja\InboxOutboundMailService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Exceptions;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 use Livewire\Livewire;
 
 uses(RefreshDatabase::class)->in(__DIR__);
@@ -319,76 +311,22 @@ it('does not load an account belonging to another user', function () {
         ->assertSet('remoteFolders', []);
 });
 
-it('sends a reply from the selected account without persisting the IMAP body', function () {
-    Mail::fake();
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $signature = Signature::factory()->for($account)->default()->create(['body' => '<p>Saludos desde la firma</p>']);
+it('loads an active account shared with the authenticated operator', function () {
+    $owner = User::factory()->create();
+    $account = MailAccount::factory()->for($owner)->create(['is_active' => true]);
+    $account->operators()->attach($this->user);
     $mailbox = Mockery::mock(ImapMailboxService::class);
-    $mailbox->shouldReceive('listFolders')->andReturn(collect([
-        ['path' => 'INBOX', 'name' => 'INBOX'],
-    ]));
-    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([
-        array_merge(inboxEnvelope(42, 'Consulta'), [
-            'message_id' => '<origin@example.com>',
-            'references' => '<root@example.com>',
-        ]),
-    ]));
+    $mailbox->shouldReceive('listFolders')->once()->andReturn(collect([['path' => 'INBOX', 'name' => 'INBOX']]));
+    $mailbox->shouldReceive('listEnvelopes')->once()->andReturn(collect([inboxEnvelope(42, 'Shared mailbox message')]));
     $this->instance(ImapMailboxService::class, $mailbox);
 
     Livewire::actingAs($this->user)
         ->test('pages::bandeja.inbox')
-        ->call('openComposer', 'reply', 42)
-        ->assertSet('composerOpen', true)
-        ->assertSet('composerSignatureId', $signature->id)
-        ->set('composerBody', 'Respuesta desde la bandeja')
-        ->call('sendComposer');
-
-    Mail::assertSent(ImapOutboundMail::class, function (ImapOutboundMail $mail) use ($account): bool {
-        return $mail->account->is($account)
-            && $mail->recipientEmail === 'sender42@example.com'
-            && $mail->inReplyTo === '<origin@example.com>'
-            && $mail->signature === '<p>Saludos desde la firma</p>';
-    });
-
-    $record = MailMessage::query()->where('mail_account_id', $account->id)->sole();
-    expect($record->body_html)->toBeNull()
-        ->and($record->body_text)->toBeNull()
-        ->and($record->in_reply_to)->toBe('<origin@example.com>')
-        ->and($record->message_id)->toMatch('/^[^<>]+@[^<>]+$/');
+        ->assertSet('selectedAccountId', $account->id)
+        ->assertSet('envelopes.0.subject', 'Shared mailbox message');
 });
 
-it('reports outbound failures with safe composer context', function () {
-    Exceptions::fake();
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $mailbox = Mockery::mock(ImapMailboxService::class);
-    $mailbox->shouldReceive('listFolders')->andReturn(collect([['path' => 'INBOX', 'name' => 'INBOX']]));
-    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([inboxEnvelope(42, 'Consulta')]));
-    $this->instance(ImapMailboxService::class, $mailbox);
-
-    $exception = new RuntimeException('SMTP delivery failed');
-    $outbound = Mockery::mock(InboxOutboundMailService::class);
-    $outbound->shouldReceive('send')->once()->andThrow($exception);
-    $this->instance(InboxOutboundMailService::class, $outbound);
-
-    Log::shouldReceive('withContext')->once()->with([
-        'mail_account_id' => $account->id,
-        'mode' => 'reply',
-        'recipient_domain' => 'example.com',
-        'recipient_count' => 4,
-    ]);
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->call('openComposer', 'reply', 42)
-        ->set('composerCc', 'copy.one@example.com, copy.two@example.com')
-        ->set('composerBcc', 'copy.three@example.com')
-        ->set('composerBody', 'Sensitive outgoing body')
-        ->call('sendComposer');
-
-    Exceptions::assertReported(fn (RuntimeException $reported): bool => $reported === $exception);
-});
-
-it('opens the bound composer with reply and forward defaults', function () {
+it('opens the shared composer with the selected account and IMAP identity', function () {
     $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
     $mailbox = Mockery::mock(ImapMailboxService::class);
     $mailbox->shouldReceive('listFolders')->andReturn(collect([['path' => 'INBOX', 'name' => 'INBOX']]));
@@ -398,134 +336,21 @@ it('opens the bound composer with reply and forward defaults', function () {
     $component = Livewire::actingAs($this->user)
         ->test('pages::bandeja.inbox');
 
-    $html = $component->html();
-
-    expect($html)->toContain('data-flux-modal')
-        ->and($html)->toContain('wire:model.self="composerOpen"')
-        ->and($html)->toContain('w-[min(96vw,72rem)]')
-        ->and($html)->toContain('style="resize: both; "')
-        ->and($html)->toContain('min-h-48');
-
     $component
         ->call('openComposer', 'reply', 42)
         ->assertSet('composerOpen', true)
         ->assertSet('composerMode', 'reply')
-        ->assertSet('composerTo', 'sender42@example.com')
-        ->assertSet('composerSubject', 'Re: Consulta');
+        ->assertSet('composerAccountId', $account->id)
+        ->assertSet('composerFolder', 'INBOX')
+        ->assertSet('composerImapUid', 42)
+        ->assertSet('composerOriginData.message_id', '<42@imap.example>');
 
-    $component->call('openComposer', 'forward', 42)
+    $component
+        ->call('openComposer', 'forward', 42)
         ->assertSet('composerOpen', true)
         ->assertSet('composerMode', 'forward')
-        ->assertSet('composerTo', '')
-        ->assertSet('composerSubject', 'Fwd: Consulta')
+        ->assertSet('composerImapUid', 42)
         ->call('closeComposer')
         ->assertSet('composerOpen', false)
         ->assertSet('composerMode', null);
-});
-
-it('keeps edited text until the user explicitly applies a selected template', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $template = Template::factory()->create([
-        'name' => 'Seguimiento',
-        'subject' => 'Seguimiento de consulta',
-        'body' => 'Cuerpo de plantilla',
-    ]);
-    $mailbox = Mockery::mock(ImapMailboxService::class);
-    $mailbox->shouldReceive('listFolders')->andReturn(collect([['path' => 'INBOX', 'name' => 'INBOX']]));
-    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([inboxEnvelope(42, 'Consulta')]));
-    $this->instance(ImapMailboxService::class, $mailbox);
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->call('openComposer', 'reply', 42)
-        ->set('composerBody', 'Texto editado')
-        ->set('composerTemplateId', $template->id)
-        ->assertSet('composerBody', 'Texto editado')
-        ->call('applyComposerTemplate')
-        ->assertSet('composerBody', 'Cuerpo de plantilla')
-        ->assertSet('composerSubject', 'Re: Consulta');
-});
-
-it('uses a selected contact or a valid manual recipient for forwards', function () {
-    Mail::fake();
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $contact = Contact::factory()->create(['name' => 'Ana Perez', 'email' => 'ana@example.com']);
-    $mailbox = Mockery::mock(ImapMailboxService::class);
-    $mailbox->shouldReceive('listFolders')->andReturn(collect([['path' => 'INBOX', 'name' => 'INBOX']]));
-    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([inboxEnvelope(42, 'Consulta')]));
-    $this->instance(ImapMailboxService::class, $mailbox);
-
-    $component = Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->call('openComposer', 'forward', 42)
-        ->set('composerContactSearch', 'Ana');
-
-    expect($component->get('composerContacts')->pluck('id')->all())->toContain($contact->id);
-
-    $component
-        ->call('selectComposerContact', $contact->id)
-        ->assertSet('composerTo', 'ana@example.com')
-        ->set('composerBody', 'Reenvío para contacto')
-        ->call('sendComposer');
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->call('openComposer', 'forward', 42)
-        ->set('composerTo', 'manual@example.com')
-        ->set('composerBody', 'Reenvío manual')
-        ->call('sendComposer');
-
-    Mail::assertSent(ImapOutboundMail::class, fn (ImapOutboundMail $mail): bool => $mail->recipientEmail === 'ana@example.com');
-    Mail::assertSent(ImapOutboundMail::class, fn (ImapOutboundMail $mail): bool => $mail->recipientEmail === 'manual@example.com');
-});
-
-it('sends and persists comma-separated CC and BCC recipients', function () {
-    Mail::fake();
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $mailbox = Mockery::mock(ImapMailboxService::class);
-    $mailbox->shouldReceive('listFolders')->andReturn(collect([['path' => 'INBOX', 'name' => 'INBOX']]));
-    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([inboxEnvelope(42, 'Consulta')]));
-    $this->instance(ImapMailboxService::class, $mailbox);
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->call('openComposer', 'reply', 42)
-        ->set('composerCc', 'cc.one@example.com, cc.two@example.com')
-        ->set('composerBcc', 'bcc@example.com')
-        ->set('composerBody', 'Respuesta con copias')
-        ->call('sendComposer');
-
-    Mail::assertSent(ImapOutboundMail::class, function (ImapOutboundMail $mail): bool {
-        return $mail->ccRecipients === ['cc.one@example.com', 'cc.two@example.com']
-            && $mail->bccRecipients === ['bcc@example.com'];
-    });
-
-    $record = MailMessage::query()->where('mail_account_id', $account->id)->sole();
-    expect($record->cc)->toBe(['cc.one@example.com', 'cc.two@example.com'])
-        ->and($record->bcc)->toBe(['bcc@example.com']);
-});
-
-it('validates the mailbox composer before sending', function () {
-    $account = MailAccount::factory()->for($this->user)->create(['is_active' => true]);
-    $mailbox = Mockery::mock(ImapMailboxService::class);
-    $mailbox->shouldReceive('listFolders')->andReturn(collect([
-        ['path' => 'INBOX', 'name' => 'INBOX'],
-    ]));
-    $mailbox->shouldReceive('listEnvelopes')->andReturn(collect([inboxEnvelope(42, 'Consulta')]));
-    $this->instance(ImapMailboxService::class, $mailbox);
-
-    Livewire::actingAs($this->user)
-        ->test('pages::bandeja.inbox')
-        ->call('openComposer', 'forward', 42)
-        ->set('composerTo', '')
-        ->set('composerCc', 'not-an-email')
-        ->set('composerBcc', 'also-not-an-email')
-        ->set('composerBody', '')
-        ->call('sendComposer')
-        ->assertHasErrors([
-            'composerTo',
-            'composerCc',
-            'composerBcc',
-            'composerBody',
-        ]);
 });

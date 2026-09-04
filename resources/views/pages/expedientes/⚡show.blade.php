@@ -1,20 +1,32 @@
 <?php
 
-use App\Enums\MilestoneAction;
 use App\Models\Expedient;
 use App\Models\User;
 use Flux\Flux;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\Computed;
+use Livewire\Attributes\On;
 use Livewire\Attributes\Title;
 use Livewire\Component;
 
-new #[Title('Detalle del Expediente')] class extends Component {
+new #[Title('Detalle del Expediente')] class extends Component
+{
     public Expedient $expedient;
 
-    // Mail composer state
+    // Mail composer launcher state
+    public bool $composerOpen = false;
+
     public ?string $composerMode = null;
+
+    public ?int $composerAccountId = null;
+
+    public ?string $composerFolder = null;
+
+    public ?int $composerImapUid = null;
+
     public ?int $composerOriginMessageId = null;
+
     public string $stateDeadline = '';
 
     /** Livewire recibe el expediente de la ruta y prepara el formulario de hitos. */
@@ -78,7 +90,7 @@ new #[Title('Detalle del Expediente')] class extends Component {
     public function saveDeadline(): void
     {
         abort_unless(Auth::user()->can('expedientes.actualizar'), 403);
-        abort_unless($this->expedient->mailAccount?->user_id === Auth::id(), 403);
+        abort_unless($this->expedient->mailAccount?->isAccessibleBy(Auth::user()), 403);
 
         $validated = $this->validate([
             'stateDeadline' => ['nullable', 'date'],
@@ -86,7 +98,7 @@ new #[Title('Detalle del Expediente')] class extends Component {
 
         $this->expedient->updateDeadline(
             Auth::user(),
-            filled($validated['stateDeadline']) ? \Illuminate\Support\Carbon::parse($validated['stateDeadline']) : null,
+            filled($validated['stateDeadline']) ? Carbon::parse($validated['stateDeadline']) : null,
         );
         $this->expedient->refresh();
         $this->stateDeadline = $this->expedient->state_deadline?->format('Y-m-d\\TH:i') ?? '';
@@ -108,32 +120,55 @@ new #[Title('Detalle del Expediente')] class extends Component {
         Flux::toast(variant: 'success', text: __('Envío de huella al cliente registrado.'));
     }
 
-    /** Acción `wire:click` que abre el compositor para un mensaje asociado. */
+    /** Opens the shared composer for an associated message. */
     public function openComposer(string $mode, int $messageId): void
     {
         abort_unless(Auth::user()->can('expedientes.actualizar'), 403);
 
-        abort_unless(in_array($mode, ['reply_client', 'forward_provider'], true), 404);
-        abort_unless($this->expedient->mailAccount?->user_id === Auth::id(), 403);
+        $mode = match ($mode) {
+            'reply', 'reply_client' => 'reply',
+            'forward', 'forward_provider' => 'forward',
+            default => abort(404),
+        };
+        abort_unless($this->expedient->mailAccount?->isAccessibleBy(Auth::user()), 403);
 
-        if ($mode === 'reply_client') {
-            $this->expedient->assertCanReplyClient();
-        } else {
-            $this->expedient->assertCanForwardProvider();
-        }
+        $origin = $this->expedient->mailMessages()
+            ->whereKey($messageId)
+            ->where('mail_account_id', $this->expedient->mail_account_id)
+            ->firstOrFail();
+        abort_if($origin->folder === null || $origin->imap_uid === null, 404);
 
-        abort_unless($this->expedient->mailMessages()->whereKey($messageId)->where('mail_account_id', $this->expedient->mail_account_id)->exists(), 404);
-
+        $this->composerOpen = true;
         $this->composerMode = $mode;
+        $this->composerAccountId = $this->expedient->mail_account_id;
+        $this->composerFolder = $origin->folder;
+        $this->composerImapUid = (int) $origin->imap_uid;
         $this->composerOriginMessageId = $messageId;
-
-        Flux::modal('mail-composer')->show();
     }
 
-    /** Acción `wire:click` que cierra el compositor embebido. */
+    #[On('outbound-mail-sent')]
+    /** Refreshes the expedient after the shared composer sends successfully. */
+    public function refreshAfterOutboundMail(): void
+    {
+        $this->expedient->refresh();
+        $this->closeComposer();
+    }
+
+    #[On('outbound-mail-composer-closed')]
+    /** Clears the composer launcher after the shared modal closes. */
+    public function clearOutboundComposer(): void
+    {
+        $this->closeComposer();
+    }
+
+    /** Clears the shared composer launcher state. */
     public function closeComposer(): void
     {
+        $this->composerOpen = false;
         $this->composerMode = null;
+        $this->composerAccountId = null;
+        $this->composerFolder = null;
+        $this->composerImapUid = null;
         $this->composerOriginMessageId = null;
     }
 
@@ -365,7 +400,7 @@ new #[Title('Detalle del Expediente')] class extends Component {
                             <flux:button
                                 variant="ghost"
                                 size="xs"
-                                wire:click="openComposer('reply_client', {{ $message->id }})"
+                                wire:click="openComposer('reply', {{ $message->id }})"
                             >
                                 <flux:icon name="arrow-uturn-left" class="w-3 h-3" />
                                 {{ $expedient->phone_validated_at ? __('Responder') : __('Solicitar teléfono') }}
@@ -374,7 +409,7 @@ new #[Title('Detalle del Expediente')] class extends Component {
                                 <flux:button
                                     variant="ghost"
                                     size="xs"
-                                    wire:click="openComposer('forward_provider', {{ $message->id }})"
+                                    wire:click="openComposer('forward', {{ $message->id }})"
                                 >
                                     <flux:icon name="arrow-turn-down-right" class="w-3 h-3" />
                                     {{ __('Reenviar') }}
@@ -437,12 +472,15 @@ new #[Title('Detalle del Expediente')] class extends Component {
 
     {{-- Mail composer modal --}}
     @can('expedientes.actualizar')
-        @if ($composerMode && $composerOriginMessageId)
+        @if ($composerOpen && $composerAccountId && $composerFolder && $composerImapUid && $composerMode && $composerOriginMessageId)
             @livewire('pages::bandeja.mail-composer', [
+                'accountId' => $composerAccountId,
+                'folder' => $composerFolder,
+                'imapUid' => $composerImapUid,
                 'mode' => $composerMode,
                 'expedientId' => $expedient->id,
                 'originMessageId' => $composerOriginMessageId,
-            ], key('mail-composer-'.$composerMode.'-'.$composerOriginMessageId))
+            ], key('outbound-mail-composer-'.$composerAccountId.'-'.$composerFolder.'-'.$composerImapUid.'-'.$composerMode))
         @endif
     @endcan
 </section>
