@@ -6,7 +6,9 @@ namespace App\Models;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -40,6 +42,27 @@ class User extends Authenticatable
     public function mailAccounts(): HasMany
     {
         return $this->hasMany(MailAccount::class);
+    }
+
+    /**
+     * Get mail accounts for which this user is an authorized operator.
+     */
+    public function sharedMailAccounts(): BelongsToMany
+    {
+        return $this->belongsToMany(MailAccount::class, 'mail_account_operator')->withTimestamps();
+    }
+
+    /**
+     * Get all mail accounts available to this user, including owned accounts.
+     *
+     * @return Builder<MailAccount>
+     */
+    public function accessibleMailAccounts(): Builder
+    {
+        return MailAccount::query()->where(function (Builder $query): void {
+            $query->where('user_id', $this->id)
+                ->orWhereHas('operators', fn (Builder $operators): Builder => $operators->whereKey($this->id));
+        });
     }
 
     /**

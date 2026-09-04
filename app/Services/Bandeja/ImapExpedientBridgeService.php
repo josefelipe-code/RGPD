@@ -11,6 +11,10 @@ use Illuminate\Support\Collection;
 
 class ImapExpedientBridgeService
 {
+    public function __construct(
+        private ImapMessageOperationReservationService $reservationService,
+    ) {}
+
     /**
      * Stores only remote identity/header evidence after explicit human confirmation.
      *
@@ -18,9 +22,11 @@ class ImapExpedientBridgeService
      */
     public function associate(MailAccount $account, Expedient $expedient, User $actor, array $envelope): ImapMessageReference
     {
-        if ($account->user_id !== $actor->id || $expedient->mail_account_id !== $account->id) {
-            throw new AuthorizationException('The account and expedient must belong to the current user.');
+        if (! $account->isAccessibleBy($actor) || $expedient->mail_account_id !== $account->id) {
+            throw new AuthorizationException('The account must be accessible to the current user and match the expedient.');
         }
+
+        $this->reservationService->assertHeldBy($account, $actor, $envelope['folder'], (int) $envelope['uid']);
 
         $reference = ImapMessageReference::query()->firstOrCreate([
             'mail_account_id' => $account->id,

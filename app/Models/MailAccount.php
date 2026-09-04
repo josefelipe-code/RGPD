@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 #[Fillable([
@@ -72,6 +73,22 @@ class MailAccount extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /**
+     * Get the operators authorized to use this account.
+     */
+    public function operators(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'mail_account_operator')->withTimestamps();
+    }
+
+    /**
+     * Determine whether a user owns or is authorized to use this account.
+     */
+    public function isAccessibleBy(User $user): bool
+    {
+        return $this->user_id === $user->id || $this->operators()->whereKey($user->id)->exists();
     }
 
     /**
